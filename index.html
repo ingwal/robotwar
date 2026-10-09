@@ -163,10 +163,23 @@ const WALL_LAYOUTS = {
   ],
 };
 
+// Each wall is cut into roughly 1x1 blocks that can be shot to pieces one at a time.
+const WALL_HP = 2;
+const BLOCK_SIZE = 1;
 function buildWalls(layoutKey, arena) {
-  return (WALL_LAYOUTS[layoutKey] ?? []).map(([fx0, fz0, fx1, fz1]) => ({
-    x0: fx0 * arena, z0: fz0 * arena, x1: fx1 * arena, z1: fz1 * arena,
-  }));
+  const blocks = [];
+  for (const [fx0, fz0, fx1, fz1] of WALL_LAYOUTS[layoutKey] ?? []) {
+    const x0 = fx0 * arena, z0 = fz0 * arena, x1 = fx1 * arena, z1 = fz1 * arena;
+    const nx = Math.max(1, Math.round((x1 - x0) / BLOCK_SIZE)), nz = Math.max(1, Math.round((z1 - z0) / BLOCK_SIZE));
+    for (let i = 0; i < nx; i++)
+      for (let j = 0; j < nz; j++)
+        blocks.push({
+          x0: x0 + ((x1 - x0) * i) / nx, x1: x0 + ((x1 - x0) * (i + 1)) / nx,
+          z0: z0 + ((z1 - z0) * j) / nz, z1: z0 + ((z1 - z0) * (j + 1)) / nz,
+          hp: WALL_HP, maxHp: WALL_HP, seed: Math.random() * 10,
+        });
+  }
+  return blocks;
 }
 
 let ARENA = 14;
@@ -203,7 +216,7 @@ try {
 } catch {}
 
 let phase = 'setup';
-let robots = [], bullets = [], explosions = [], impacts = [], roundOverTimer = 0, battleTime = 0;
+let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], roundOverTimer = 0, battleTime = 0;
 const msg = document.getElementById('msg');
 
 function newRound(cfg) {
@@ -252,7 +265,7 @@ function newRound(cfg) {
       };
     });
   }
-  bullets = []; explosions = []; impacts = [];
+  bullets = []; explosions = []; impacts = []; crumbles = [];
   battleTime = 0;
   msg.textContent = '';
   buildBoard();
@@ -411,6 +424,8 @@ function update(dt) {
   explosions = explosions.filter((e) => e.age < RobotGfx.EXPLOSION_TIME);
   for (const i of impacts) i.age += dt;
   impacts = impacts.filter((i) => i.age < RobotGfx.IMPACT_TIME);
+  for (const c of crumbles) c.age += dt;
+  crumbles = crumbles.filter((c) => c.age < RobotGfx.CRUMBLE_TIME);
 
   // clear per-frame collision flags before resolving collisions this frame
   for (const r of robots) { r.wallHit = false; r.robotHit = false; }
@@ -441,9 +456,15 @@ function update(dt) {
     const b = bullets[i];
     b.x += b.vx * dt; b.z += b.vz * dt; b.life -= dt;
     let dead = b.life <= 0;
-    if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || WALLS.some((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1)) {
+    const block = WALLS.find((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1);
+    if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || block) {
       impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
       dead = true;
+    }
+    if (block && --block.hp <= 0) {
+      WALLS.splice(WALLS.indexOf(block), 1);
+      crumbles.push({ ...block, age: 0 });
+      playCrumble();
     }
     for (const r of robots) {
       if (r === b.owner || dead || r.dying !== null) continue;
@@ -779,6 +800,23 @@ function unlockAudio() {
 addEventListener('pointerdown', unlockAudio);
 addEventListener('keydown', unlockAudio);
 
+// A low, crunchy rumble of filtered noise for a wall block collapsing.
+function playCrumble() {
+  if (!audio || muted || audio.state !== 'running') return;
+  const now = audio.currentTime;
+  for (let k = 0; k < 4; k++) {
+    const t = now + k * 0.05 + Math.random() * 0.04;
+    const src = audio.createBufferSource(), lp = audio.createBiquadFilter(), g = audio.createGain();
+    src.buffer = noise;
+    lp.type = 'lowpass';
+    lp.frequency.value = 500 + Math.random() * 500;
+    g.gain.setValueAtTime(0.35, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    src.connect(lp).connect(g).connect(audio.destination);
+    src.start(t);
+  }
+}
+
 function playKlank() {
   if (!audio || muted || audio.state !== 'running') return;
   const now = audio.currentTime, pitch = 0.85 + Math.random() * 0.3;
@@ -844,6 +882,7 @@ function frame(now) {
   for (const b of bullets) gfx.drawBullet(b);
   for (const i of impacts) gfx.drawImpact(i);
   for (const e of explosions) gfx.drawExplosion(e);
+  for (const c of crumbles) gfx.drawCrumble(c);
 
   if (watchedRobots.length > 0 && phase === 'battle') {
     const sx = canvas.width / canvas.clientWidth, sy = canvas.height / canvas.clientHeight;
@@ -873,6 +912,7 @@ function frame(now) {
       for (const b of bullets) gfx.drawBullet(b);
       for (const i of impacts) gfx.drawImpact(i);
       for (const e of explosions) gfx.drawExplosion(e);
+      for (const c of crumbles) gfx.drawCrumble(c);
       gl.disable(gl.SCISSOR_TEST);
     }
     gl.viewport(0, 0, canvas.width, canvas.height);

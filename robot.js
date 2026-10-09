@@ -10,6 +10,7 @@
 //   gfx.drawWalls([{ x0, z0, x1, z1 }, ...]);      // interior walls, axis-aligned boxes
 //   gfx.drawRadar(robot);                          // the robot's last radar scan, if any (robot.scan)
 //   gfx.drawImpact({ x, y, z, age });               // bullet hitting a wall; done after IMPACT_TIME
+//   gfx.drawCrumble({ x0, z0, x1, z1, seed, age }); // a wall block falling apart; done after CRUMBLE_TIME
 //
 // ROBOT STATE (all optional except x, z, heading, turret, color):
 //   x, z       position on the ground plane
@@ -271,6 +272,7 @@ void main() {
   };
 
   const EXPLOSION_TIME = 1.3;
+  const CRUMBLE_TIME = 3;
 
   function create(gl) {
     const prog = gl.createProgram();
@@ -486,8 +488,11 @@ void main() {
       flash = 0;
       for (const w of walls) {
         const cx = (w.x0 + w.x1) / 2, cz = (w.z0 + w.z1) / 2, sx = w.x1 - w.x0, sz = w.z1 - w.z0;
-        draw(M.slab, chain(translate(cx, WALL_HEIGHT / 2, cz), scale(sx, WALL_HEIGHT, sz)), INNER_WALL);
-        draw(M.slab, chain(translate(cx, WALL_HEIGHT, cz), scale(sx + 0.08, 0.08, sz + 0.08)), lighten(INNER_WALL, 0.35));
+        // Damaged blocks sink and darken, so you can see which ones are about to go.
+        const f = w.maxHp ? w.hp / w.maxHp : 1, h = WALL_HEIGHT * (0.45 + 0.55 * f);
+        const col = INNER_WALL.map((v) => v * (0.7 + 0.3 * f));
+        draw(M.slab, chain(translate(cx, h / 2, cz), scale(sx, h, sz)), col);
+        draw(M.slab, chain(translate(cx, h, cz), scale(sx + 0.08, 0.08, sz + 0.08)), lighten(col, 0.35));
       }
     }
 
@@ -544,8 +549,32 @@ void main() {
       }
     }
 
-    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawShadow };
+    // A wall block collapsing: chunks pop up, tumble and fall, and a pile of rubble settles and
+    // fades. c = { x0, z0, x1, z1, maxHp, seed, age }; finished when age >= CRUMBLE_TIME.
+    function drawCrumble(c) {
+      const { age } = c, seed = c.seed ?? 0;
+      const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2, sx = c.x1 - c.x0, sz = c.z1 - c.z0;
+      const shrink = Math.min(1, (CRUMBLE_TIME - age) / 0.5);
+      const h0 = WALL_HEIGHT * 0.45;
+      flash = 0;
+      const dust = Math.max(0, 1 - age / 0.6);
+      if (dust > 0) drawGlow(M.sphere, chain(translate(cx, h0 * 0.6, cz), scale((sx + sz) * 0.4 * (1 + age * 1.5))), lighten(INNER_WALL, 0.5), 0.45 * dust);
+      for (let i = 0; i < 14; i++) {
+        const r1 = Math.sin(seed * 13.1 + i * 7.3) * 0.5 + 0.5, r2 = Math.sin(seed * 5.7 + i * 3.1) * 0.5 + 0.5;
+        const ox = (r1 - 0.5) * sx, oz = (r2 - 0.5) * sz, ys = (i % 3) / 3 * h0 + 0.15;
+        const vx = (r1 - 0.5) * 3, vz = (r2 - 0.5) * 3, vy = 1.5 + (i % 4) * 0.7;
+        const t = age, size = 0.18 + ((i * 5) % 4) * 0.06;
+        const y = Math.max(size / 2, ys + vy * t - 4.9 * t * t);
+        const settle = y <= size / 2 ? 0 : 1;
+        const tf = Math.min(t, 0.5);
+        const m = chain(translate(cx + ox + vx * tf * 0.6, y, cz + oz + vz * tf * 0.6),
+          rotX(settle * t * (4 + i) + i), rotZ(settle * t * (3 + i) + i * 0.5), scale(size * shrink));
+        draw(M.cube, m, INNER_WALL.map((v) => v * (0.65 + 0.1 * (i % 3))));
+      }
+    }
+
+    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawShadow };
   }
 
-  global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, WALL_HEIGHT };
+  global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, WALL_HEIGHT };
 })(window);
