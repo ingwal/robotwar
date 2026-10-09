@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot War</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #cdd6e4; font-family: system-ui, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+  #hud { position: fixed; left: 12px; top: 10px; padding: 6px 10px; border-radius: 8px;
+         background: rgba(255, 255, 255, 0.65); color: #2a3347; font-size: 13px; user-select: none; }
+  #msg { position: fixed; left: 0; right: 0; top: 40%; text-align: center; pointer-events: none;
+         color: #2a3347; font-size: 48px; font-weight: 800; text-shadow: 0 2px 0 #fff; }
+  .panel { background: rgba(255, 255, 255, 0.92); color: #2a3347; border-radius: 14px;
+           box-shadow: 0 8px 30px rgba(30, 40, 70, 0.25); }
+  #setup { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+           width: min(560px, calc(100vw - 32px)); box-sizing: border-box; padding: 20px 22px;
+           max-height: calc(100vh - 40px); overflow-y: auto; }
+  #setup[hidden] { display: none; }
+  #setup h2 { margin: 0 0 14px; font-size: 20px; }
+  .config-section { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #e0e5ef; }
+  .config-row { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; }
+  .config-row label { display: flex; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
+  .config-row input[type=range] { accent-color: #2a3347; width: 110px; }
+  .config-row select { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #b8c2d4; background: #fff; }
+  .mode-row { margin-bottom: 12px; font-size: 13px; }
+  .count-row { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin-bottom: 10px; font-size: 13px; }
+  .count-row label { display: flex; align-items: center; gap: 8px; }
+  .count-row input[type=number] { width: 50px; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid #b8c2d4; }
+  .team-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px;
+                font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.65; }
+  .slot { display: grid; grid-template-columns: 18px 70px 1fr; gap: 4px 10px; align-items: center; margin-bottom: 12px; }
+  .slot small { grid-column: 3; color: #5a6478; font-size: 12px; line-height: 1.35; }
+  .slot select { font: inherit; padding: 5px 6px; border-radius: 6px; border: 1px solid #b8c2d4; background: #fff; }
+  .dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  button { font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 8px; border: 1px solid #b8c2d4;
+           background: #fff; color: #2a3347; cursor: pointer; }
+  button.primary { background: #2a3347; border-color: #2a3347; color: #fff; }
+  #board { position: fixed; left: 12px; bottom: 12px; padding: 8px 12px; font-size: 13px; user-select: none; }
+  #board div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  #board .dead { opacity: 0.4; text-decoration: line-through; }
+  #board .hp { margin-left: auto; padding-left: 14px; font-variant-numeric: tabular-nums; }
+  #board .team-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; margin-top: 5px; }
+  #board .eye { all: unset; cursor: pointer; font-size: 14px; opacity: 0.3; margin-left: 4px; line-height: 1; }
+  #board .eye:hover, #board .eye.watching { opacity: 1; }
+  #eyeview { position: fixed; right: 12px; bottom: 12px; width: 260px; pointer-events: none; z-index: 10; }
+  #eyeview[hidden] { display: none; }
+  #eyeview-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+                 background: rgba(255,255,255,0.9); color: #2a3347; border-radius: 8px 8px 0 0;
+                 padding: 4px 10px; font-size: 12px; font-weight: 600; pointer-events: auto; }
+  #eyeview-bar button { all: unset; cursor: pointer; font-size: 13px; opacity: 0.5; }
+  #eyeview-bar button:hover { opacity: 1; }
+  #eyeview-port { height: 160px; border-radius: 0 0 8px 8px;
+                  box-shadow: 0 6px 24px rgba(0,0,0,0.4), inset 0 0 0 1.5px rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><b>Robot War</b> · drag to orbit · scroll to zoom · space to pause · Esc to stop · M to mute · click once to enable sound</div>
+<div id="msg"></div>
+<div id="board" class="panel"></div>
+<div id="eyeview" hidden>
+  <div id="eyeview-bar"><span id="eyeview-name"></span><button id="eyeview-close" title="Close">✕</button></div>
+  <div id="eyeview-port"></div>
+</div>
+<div id="setup" class="panel">
+  <h2>Robot War</h2>
+  <div class="config-section">
+    <div class="config-row">
+      <label>Arena: <span id="arenaVal">14</span>
+        <input type="range" id="arenaSize" min="10" max="30" value="14" step="1">
+      </label>
+      <label>Shots to kill: <input type="number" id="shotsToKill" min="1" max="10" value="6"></label>
+      <label>Obstacles:
+        <select id="layoutPick">
+          <option value="open">Open</option>
+          <option value="cross" selected>Cross</option>
+          <option value="fourRooms">Four Rooms</option>
+          <option value="pillars">Pillars</option>
+          <option value="maze">Maze</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <div class="mode-row">
+    <label><input type="checkbox" id="teamsMode"> Teams mode</label>
+  </div>
+  <div id="noTeamsSection">
+    <div class="count-row">
+      <label>Robots: <input type="number" id="robotCount" min="1" max="8" value="4"></label>
+    </div>
+    <div id="slots"></div>
+  </div>
+  <div id="teamsSection" hidden>
+    <div class="count-row">
+      <label>Teams: <input type="number" id="teamCount" min="2" max="4" value="2"></label>
+      <label>Robots per team: <input type="number" id="robotsPerTeam" min="1" max="4" value="2"></label>
+    </div>
+    <div id="teamSlots"></div>
+  </div>
+  <div class="buttons"><button id="shuffle">Shuffle</button><button id="fight" class="primary">Fight!</button></div>
+</div>
+<script src="robot.js"></script>
+<script src="strategies.js"></script>
+<script>
+'use strict';
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: true });
+if (!gl) throw new Error('WebGL2 not supported');
+const gfx = RobotGfx.create(gl);
+const { mat4 } = RobotGfx;
+
+// ---------- constants ----------
+const MAX_HP = 6;
+const MAX_SPEED = 1.8;
+const BULLET_SPEED = 16;
+const ROUND_TIME = 180;
+const DEATH_TIME = 0.7;
+const ROBOT_RADIUS = 0.7;
+
+const TEAMS = [
+  { name: 'Coral',  color: [1.0,  0.45, 0.40] },
+  { name: 'Teal',   color: [0.25, 0.75, 0.72] },
+  { name: 'Sunny',  color: [1.0,  0.75, 0.25] },
+  { name: 'Violet', color: [0.60, 0.50, 0.95] },
+  { name: 'Lime',   color: [0.50, 0.92, 0.22] },
+  { name: 'Azure',  color: [0.22, 0.52, 1.0]  },
+  { name: 'Rose',   color: [1.0,  0.35, 0.68] },
+  { name: 'Amber',  color: [1.0,  0.58, 0.08] },
+];
+
+// Wall layouts as fractions of ARENA so they scale with arena size.
+// Each entry is [fx0, fz0, fx1, fz1] where 1.0 = ARENA half-width.
+const WALL_LAYOUTS = {
+  open: [],
+  cross: [
+    [-0.5,   -0.25,  -0.443,  0.25 ],
+    [ 0.443, -0.25,   0.5,    0.25 ],
+    [-0.25,  -0.5,    0.25,  -0.443],
+    [-0.25,   0.443,  0.25,   0.5  ],
+    [-0.071, -0.071,  0.071,  0.071],
+  ],
+  fourRooms: [
+    [-1.0,  -0.036, -0.15,  0.036],
+    [ 0.15, -0.036,  1.0,   0.036],
+    [-0.036,  0.15,  0.036, 1.0  ],
+    [-0.036, -1.0,   0.036,-0.15 ],
+  ],
+  pillars: [
+    [-0.6,  -0.6,  -0.5,  -0.5 ],
+    [ 0.5,  -0.6,   0.6,  -0.5 ],
+    [-0.6,   0.5,  -0.5,   0.6 ],
+    [ 0.5,   0.5,   0.6,   0.6 ],
+    [-0.071,-0.071,  0.071, 0.071],
+    [ 0.3,  -0.15,  0.4,   0.15 ],
+  ],
+  maze: [
+    [-0.7,  -0.036,  0.1,   0.036],
+    [ 0.3,  -0.036,  0.7,   0.036],
+    [-0.1,  -0.7,    0.036,-0.15 ],
+    [-0.036,  0.2,   0.1,   0.7  ],
+    [ 0.4,   0.3,    0.5,   0.7  ],
+    [-0.5,  -0.65,  -0.4,  -0.3  ],
+  ],
+};
+
+function buildWalls(layoutKey, arena) {
+  return (WALL_LAYOUTS[layoutKey] ?? []).map(([fx0, fz0, fx1, fz1]) => ({
+    x0: fx0 * arena, z0: fz0 * arena, x1: fx1 * arena, z1: fz1 * arena,
+  }));
+}
+
+let ARENA = 14;
+let RADAR_RANGE = ARENA * (24 / 14);
+let WALLS = buildWalls('cross', ARENA);
+
+const STRATEGY_KEYS = Object.keys(Strategies);
+
+let config = {
+  arenaSize: 14, layout: 'cross', shotsToKill: 6,
+  teamsMode: false,
+  robotCount: 4,
+  strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
+  teamCount: 2, robotsPerTeam: 2,
+  teamStrategies: [['rambo', 'pacer'], ['sniper', 'hunter']],
+};
+try {
+  const saved = JSON.parse(localStorage.getItem('robotwar.config'));
+  if (saved && typeof saved === 'object') {
+    if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
+    if (saved.layout in WALL_LAYOUTS) config.layout = saved.layout;
+    if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
+    if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
+    if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
+    if (Array.isArray(saved.strategies))
+      config.strategies = saved.strategies.slice(0, 8).map((k) => (k in Strategies ? k : STRATEGY_KEYS[0]));
+    if (saved.teamCount >= 2 && saved.teamCount <= 4) config.teamCount = saved.teamCount | 0;
+    if (saved.robotsPerTeam >= 1 && saved.robotsPerTeam <= 4) config.robotsPerTeam = saved.robotsPerTeam | 0;
+    if (Array.isArray(saved.teamStrategies))
+      config.teamStrategies = saved.teamStrategies.slice(0, 4).map((arr) =>
+        Array.isArray(arr) ? arr.slice(0, 4).map((k) => (k in Strategies ? k : STRATEGY_KEYS[0])) : []
+      );
+  }
+} catch {}
+
+let phase = 'setup';
+let robots = [], bullets = [], explosions = [], impacts = [], roundOverTimer = 0, battleTime = 0;
+const msg = document.getElementById('msg');
+
+function newRound(cfg) {
+  cfg = cfg ?? config;
+  clearWatched();
+  ARENA = cfg.arenaSize ?? 14;
+  RADAR_RANGE = ARENA * (24 / 14);
+  WALLS = buildWalls(cfg.layout ?? 'cross', ARENA);
+
+  if (cfg.teamsMode) {
+    const flat = [];
+    for (let t = 0; t < cfg.teamCount; t++) {
+      const team = TEAMS[t % TEAMS.length];
+      const strats = cfg.teamStrategies[t] || [];
+      for (let ri = 0; ri < cfg.robotsPerTeam; ri++)
+        flat.push({ team, teamId: t, strategy: strats[ri] || STRATEGY_KEYS[ri % STRATEGY_KEYS.length], robotIndex: ri });
+    }
+    robots = flat.map(({ team, teamId, strategy, robotIndex }, i) => {
+      const a = (i / flat.length) * Math.PI * 2 + Math.PI / 4;
+      return {
+        name: `${team.name} ${robotIndex + 1}`, color: team.color, teamId, robotIndex,
+        label: robotIndex + 1, strategy, mem: {},
+        x: Math.sin(a) * ARENA * 0.65, z: Math.cos(a) * ARENA * 0.65,
+        heading: a + Math.PI, turret: a + Math.PI,
+        seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
+        hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
+        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, scan: null, stuckTime: 0, blocked: false,
+        wallHit: false, robotHit: false, hitAngle: 0,
+      };
+    });
+  } else {
+    const count = cfg.robotCount ?? 4;
+    const strats = cfg.strategies ?? [];
+    robots = Array.from({ length: count }, (_, i) => {
+      const team = TEAMS[i % TEAMS.length];
+      const a = (i / count) * Math.PI * 2 + Math.PI / 4;
+      return {
+        name: team.name, color: team.color, teamId: i, robotIndex: i, label: null,
+        strategy: strats[i] || STRATEGY_KEYS[i % STRATEGY_KEYS.length], mem: {},
+        x: Math.sin(a) * ARENA * 0.65, z: Math.cos(a) * ARENA * 0.65,
+        heading: a + Math.PI, turret: a + Math.PI,
+        seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
+        hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
+        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, scan: null, stuckTime: 0, blocked: false,
+        wallHit: false, robotHit: false, hitAngle: 0,
+      };
+    });
+  }
+  bullets = []; explosions = []; impacts = [];
+  battleTime = 0;
+  msg.textContent = '';
+  buildBoard();
+}
+
+const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+const turnToward = (cur, target, step) => cur + Math.max(-step, Math.min(step, angDiff(cur, target)));
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function fire(r) {
+  const side = r.nextSide;
+  r.nextSide ^= 1;
+  r.recoil[side] = 1;
+  r.cooldown = 2 + Math.random() * 1.5;
+  const lx = side ? 0.6 : -0.6, lz = 0.6, c = Math.cos(r.turret), s = Math.sin(r.turret);
+  const bx = r.x + c * lx + s * lz, bz = r.z - s * lx + c * lz;
+  const aimDist = r.scan ? r.scan.range : RADAR_RANGE;
+  const ax = r.x + s * aimDist, az = r.z + c * aimDist;
+  const ddx = ax - bx, ddz = az - bz, dd = Math.hypot(ddx, ddz);
+  bullets.push({
+    x: bx, y: 1.4, z: bz,
+    vx: (ddx / dd) * BULLET_SPEED, vz: (ddz / dd) * BULLET_SPEED, owner: r, color: r.color, life: 2.5,
+  });
+}
+
+function drive(r, goal, speedFactor, dt) {
+  const before = r.heading;
+  let targetSpeed = 0;
+  if (goal) {
+    const lim = ARENA - 0.8;
+    const gx = clamp(goal.x, -lim, lim), gz = clamp(goal.z, -lim, lim);
+    const d = Math.hypot(gx - r.x, gz - r.z);
+    if (d > 0.3) {
+      const want = Math.atan2(gx - r.x, gz - r.z);
+      r.heading = turnToward(r.heading, want, 2.4 * dt);
+      const off = angDiff(r.heading, want);
+      if (Math.abs(off) < 0.8) targetSpeed = MAX_SPEED * clamp(speedFactor, 0, 1.3) * Math.cos(off) * Math.min(1, d / 1.5);
+    }
+  }
+  r.turnRate = angDiff(before, r.heading) / dt;
+  r.speed += (targetSpeed - r.speed) * Math.min(1, dt * 4);
+  r.x += Math.sin(r.heading) * r.speed * dt;
+  r.z += Math.cos(r.heading) * r.speed * dt;
+  r.wheel += r.speed * dt;
+}
+
+function pushOutOfWall(r, w) {
+  const cx = clamp(r.x, w.x0, w.x1), cz = clamp(r.z, w.z0, w.z1);
+  const dx = r.x - cx, dz = r.z - cz, d = Math.hypot(dx, dz);
+  if (d >= ROBOT_RADIUS) return;
+  r.wallHit = true;
+  if (!r.robotHit) r.hitAngle = d > 1e-6 ? Math.atan2(cx - r.x, cz - r.z) : r.heading;
+  if (d > 1e-6) {
+    r.x = cx + (dx / d) * ROBOT_RADIUS;
+    r.z = cz + (dz / d) * ROBOT_RADIUS;
+  } else {
+    const exits = [[w.x0 - ROBOT_RADIUS - r.x, 0], [w.x1 + ROBOT_RADIUS - r.x, 0], [0, w.z0 - ROBOT_RADIUS - r.z], [0, w.z1 + ROBOT_RADIUS - r.z]];
+    const [ex, ez] = exits.reduce((a, b) => (Math.hypot(...b) < Math.hypot(...a) ? b : a));
+    r.x += ex; r.z += ez;
+  }
+}
+
+// ---------- radar ----------
+function rayBox(ox, oz, dx, dz, w) {
+  let t0 = 0, t1 = Infinity;
+  for (const [o, d, lo, hi] of [[ox, dx, w.x0, w.x1], [oz, dz, w.z0, w.z1]]) {
+    if (Math.abs(d) < 1e-9) {
+      if (o < lo || o > hi) return Infinity;
+    } else {
+      let a = (lo - o) / d, b = (hi - o) / d;
+      if (a > b) [a, b] = [b, a];
+      t0 = Math.max(t0, a);
+      t1 = Math.min(t1, b);
+      if (t0 > t1) return Infinity;
+    }
+  }
+  return t0;
+}
+
+function rayLength(x, z, angle, max) {
+  const dx = Math.sin(angle), dz = Math.cos(angle);
+  let t = max;
+  if (dx > 1e-9) t = Math.min(t, (ARENA - x) / dx);
+  if (dx < -1e-9) t = Math.min(t, (-ARENA - x) / dx);
+  if (dz > 1e-9) t = Math.min(t, (ARENA - z) / dz);
+  if (dz < -1e-9) t = Math.min(t, (-ARENA - z) / dz);
+  for (const w of WALLS) t = Math.min(t, rayBox(x, z, dx, dz, w));
+  return t;
+}
+
+// Returns { dist, friendly } for the nearest robot in the beam, or null if nothing detected.
+function scan(r, angle, width) {
+  width = clamp(typeof width === 'number' ? width : 0.17, 0.03, 0.35);
+  let found = null;
+  for (const o of robots) {
+    if (o === r || o.dying !== null) continue;
+    const d = Math.hypot(o.x - r.x, o.z - r.z), dir = Math.atan2(o.x - r.x, o.z - r.z);
+    if (d > RADAR_RANGE) continue;
+    if (Math.abs(angDiff(angle, dir)) > width / 2 + Math.asin(Math.min(1, ROBOT_RADIUS / d))) continue;
+    if (rayLength(r.x, r.z, dir, d) < d) continue;
+    if (!found || d < found.dist) found = { dist: d, friendly: o.teamId === r.teamId };
+  }
+  r.scan = { angle, width, found: !!found, range: found ? found.dist : rayLength(r.x, r.z, angle, RADAR_RANGE), age: 0 };
+  return found;
+}
+
+function think(r) {
+  let scanned = false;
+  const world = {
+    arena: ARENA, walls: WALLS, bulletSpeed: BULLET_SPEED, radarRange: RADAR_RANGE, time: battleTime,
+    scan: (angle, width) => (scanned ? null : ((scanned = true), scan(r, angle, width))),
+    wallDist: (angle) => rayLength(r.x, r.z, angle, RADAR_RANGE),
+  };
+  try {
+    return Strategies[r.strategy].think(r, world) || {};
+  } catch (err) {
+    if (!r.brainError) console.error(`${r.name} (${r.strategy}) crashed:`, (r.brainError = err));
+    return {};
+  }
+}
+
+function livingTeamCount() {
+  return new Set(robots.map((r) => r.teamId)).size;
+}
+
+function update(dt) {
+  if (phase === 'battle') battleTime += dt;
+  for (const r of robots) {
+    r.recoil = r.recoil.map((v) => Math.max(0, v - dt * 3));
+    r.hit = Math.max(0, r.hit - dt * 4);
+    r.cooldown -= dt;
+    if (r.scan) r.scan.age += dt;
+    r.lastX = r.x; r.lastZ = r.z;
+    if (r.dying !== null) {
+      r.dying += dt / DEATH_TIME;
+      r.speed *= Math.max(0, 1 - dt * 6);
+      r.turnRate = 0;
+      continue;
+    }
+    const cmd = phase === 'battle' ? think(r) : {};
+    drive(r, cmd.moveTo, cmd.speed ?? 1, dt);
+    if (typeof cmd.aim === 'number') {
+      r.turret = turnToward(r.turret, cmd.aim, 3 * dt);
+      if (cmd.fire && r.cooldown <= 0 && Math.abs(angDiff(r.turret, cmd.aim)) < 0.08) fire(r);
+    }
+  }
+
+  for (let i = robots.length - 1; i >= 0; i--) {
+    const r = robots[i];
+    if (r.dying !== null && r.dying >= 1) {
+      explosions.push({ x: r.x, z: r.z, age: 0, color: r.color, seed: r.seed });
+      robots.splice(i, 1);
+    }
+  }
+  for (const e of explosions) e.age += dt;
+  explosions = explosions.filter((e) => e.age < RobotGfx.EXPLOSION_TIME);
+  for (const i of impacts) i.age += dt;
+  impacts = impacts.filter((i) => i.age < RobotGfx.IMPACT_TIME);
+
+  // clear per-frame collision flags before resolving collisions this frame
+  for (const r of robots) { r.wallHit = false; r.robotHit = false; }
+
+  for (let i = 0; i < robots.length; i++)
+    for (let j = i + 1; j < robots.length; j++) {
+      const a = robots[i], b = robots[j];
+      const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+      if (d < 1.4 && d > 0) {
+        const ang = Math.atan2(dx, dz);
+        a.robotHit = true; a.hitAngle = ang;
+        b.robotHit = true; b.hitAngle = ang + Math.PI;
+        const p = (1.4 - d) / 2 / d;
+        a.x -= dx * p; a.z -= dz * p; b.x += dx * p; b.z += dz * p;
+      }
+    }
+  const lim = ARENA - 0.8;
+  for (const r of robots) {
+    for (const w of WALLS) pushOutOfWall(r, w);
+    r.x = clamp(r.x, -lim, lim);
+    r.z = clamp(r.z, -lim, lim);
+    const moved = Math.hypot(r.x - r.lastX, r.z - r.lastZ), wanted = Math.abs(r.speed) * dt;
+    r.stuckTime = wanted > 0.005 && moved < wanted * 0.3 ? r.stuckTime + dt : 0;
+    r.blocked = r.stuckTime > 0.5;
+  }
+
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx * dt; b.z += b.vz * dt; b.life -= dt;
+    let dead = b.life <= 0;
+    if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || WALLS.some((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1)) {
+      impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
+      dead = true;
+    }
+    for (const r of robots) {
+      if (r === b.owner || dead || r.dying !== null) continue;
+      if (r.teamId === b.owner.teamId) continue;
+      if (Math.hypot(r.x - b.x, r.z - b.z) < 0.7) {
+        r.hit = 1;
+        playKlank();
+        r.hp -= 1;
+        if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
+        r.x += b.vx * 0.02; r.z += b.vz * 0.02;
+        dead = true;
+      }
+    }
+    if (dead) bullets.splice(i, 1);
+  }
+
+  if (phase === 'battle' && livingTeamCount() <= 1 && explosions.length === 0) {
+    const rep = robots[0];
+    endRound(rep ? rep.teamId : null, '');
+  } else if (phase === 'battle' && battleTime >= ROUND_TIME) {
+    const teamHp = {};
+    for (const r of robots.filter((r) => r.dying === null))
+      teamHp[r.teamId] = (teamHp[r.teamId] ?? 0) + r.hp;
+    const sorted = Object.entries(teamHp).sort((a, b) => b[1] - a[1]);
+    const winner = sorted.length > 0 && (sorted.length === 1 || sorted[0][1] > sorted[1][1])
+      ? Number(sorted[0][0]) : null;
+    endRound(winner, "Time's up! ");
+  }
+  if (phase === 'over' && (roundOverTimer -= dt) <= 0) {
+    newRound();
+    showSetup();
+  }
+  updateBoard();
+}
+
+function endRound(winnerTeamId, prefix) {
+  phase = 'over';
+  roundOverTimer = 3;
+  if (winnerTeamId == null) {
+    msg.textContent = prefix + 'Draw!';
+  } else if (config.teamsMode) {
+    const team = TEAMS[winnerTeamId % TEAMS.length];
+    msg.textContent = prefix + `${team.name} team wins!`;
+  } else {
+    const r = robots.find((r) => r.teamId === winnerTeamId)
+      ?? { name: TEAMS[winnerTeamId % TEAMS.length].name, strategy: STRATEGY_KEYS[0] };
+    msg.textContent = prefix + `${r.name} the ${Strategies[r.strategy].name} wins!`;
+  }
+}
+
+// ---------- setup screen and scoreboard ----------
+const setup = document.getElementById('setup');
+const slots = document.getElementById('slots');
+const teamSlots = document.getElementById('teamSlots');
+const board = document.getElementById('board');
+const css = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
+
+function buildSlots() {
+  slots.innerHTML = '';
+  const count = config.robotCount;
+  while (config.strategies.length < count)
+    config.strategies.push(STRATEGY_KEYS[config.strategies.length % STRATEGY_KEYS.length]);
+  for (let i = 0; i < count; i++) {
+    const team = TEAMS[i % TEAMS.length];
+    const row = document.createElement('div');
+    row.className = 'slot';
+    row.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b><select></select><small></small>`;
+    const select = row.querySelector('select'), info = row.querySelector('small');
+    for (const key of STRATEGY_KEYS) select.add(new Option(Strategies[key].name, key));
+    select.value = config.strategies[i];
+    info.textContent = Strategies[config.strategies[i]].description;
+    select.addEventListener('change', () => {
+      config.strategies[i] = select.value;
+      info.textContent = Strategies[select.value].description;
+      if (robots[i]) robots[i].strategy = select.value;
+      buildBoard();
+    });
+    slots.append(row);
+  }
+}
+
+function buildTeamSlots() {
+  teamSlots.innerHTML = '';
+  while (config.teamStrategies.length < config.teamCount) config.teamStrategies.push([]);
+  for (let t = 0; t < config.teamCount; t++) {
+    const team = TEAMS[t % TEAMS.length];
+    while (config.teamStrategies[t].length < config.robotsPerTeam)
+      config.teamStrategies[t].push(STRATEGY_KEYS[config.teamStrategies[t].length % STRATEGY_KEYS.length]);
+    const hdr = document.createElement('div');
+    hdr.className = 'team-label';
+    hdr.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b>`;
+    teamSlots.append(hdr);
+    for (let ri = 0; ri < config.robotsPerTeam; ri++) {
+      const row = document.createElement('div');
+      row.className = 'slot';
+      row.innerHTML = `<span></span><b>Robot ${ri + 1}</b><select></select><small></small>`;
+      const select = row.querySelector('select'), info = row.querySelector('small');
+      for (const key of STRATEGY_KEYS) select.add(new Option(Strategies[key].name, key));
+      select.value = config.teamStrategies[t][ri];
+      info.textContent = Strategies[config.teamStrategies[t][ri]].description;
+      const captT = t, captRi = ri;
+      select.addEventListener('change', () => {
+        config.teamStrategies[captT][captRi] = select.value;
+        info.textContent = Strategies[select.value].description;
+        const r = robots.find((r) => r.teamId === captT && r.robotIndex === captRi);
+        if (r) r.strategy = select.value;
+        buildBoard();
+      });
+      teamSlots.append(row);
+    }
+  }
+}
+
+function showSetup() {
+  phase = 'setup';
+  document.getElementById('arenaSize').value = config.arenaSize;
+  document.getElementById('arenaVal').textContent = config.arenaSize;
+  document.getElementById('shotsToKill').value = config.shotsToKill;
+  document.getElementById('layoutPick').value = config.layout;
+  document.getElementById('teamsMode').checked = config.teamsMode;
+  document.getElementById('robotCount').value = config.robotCount;
+  document.getElementById('teamCount').value = config.teamCount;
+  document.getElementById('robotsPerTeam').value = config.robotsPerTeam;
+  document.getElementById('noTeamsSection').hidden = config.teamsMode;
+  document.getElementById('teamsSection').hidden = !config.teamsMode;
+  if (config.teamsMode) buildTeamSlots();
+  else buildSlots();
+  setup.hidden = false;
+}
+
+document.getElementById('arenaSize').addEventListener('input', (e) => {
+  config.arenaSize = +e.target.value;
+  document.getElementById('arenaVal').textContent = config.arenaSize;
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('shotsToKill').addEventListener('input', (e) => {
+  config.shotsToKill = Math.max(1, Math.min(10, +e.target.value || 6));
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('layoutPick').addEventListener('change', (e) => {
+  config.layout = e.target.value;
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('teamsMode').addEventListener('change', (e) => {
+  config.teamsMode = e.target.checked;
+  document.getElementById('noTeamsSection').hidden = config.teamsMode;
+  document.getElementById('teamsSection').hidden = !config.teamsMode;
+  newRound();
+  if (config.teamsMode) buildTeamSlots();
+  else buildSlots();
+  schedulePreview();
+});
+
+document.getElementById('robotCount').addEventListener('input', (e) => {
+  config.robotCount = Math.max(1, Math.min(8, +e.target.value || 4));
+  newRound();
+  buildSlots();
+  schedulePreview();
+});
+
+document.getElementById('teamCount').addEventListener('input', (e) => {
+  config.teamCount = Math.max(2, Math.min(4, +e.target.value || 2));
+  newRound();
+  buildTeamSlots();
+  schedulePreview();
+});
+
+document.getElementById('robotsPerTeam').addEventListener('input', (e) => {
+  config.robotsPerTeam = Math.max(1, Math.min(4, +e.target.value || 2));
+  newRound();
+  buildTeamSlots();
+  schedulePreview();
+});
+
+document.getElementById('shuffle').addEventListener('click', () => {
+  if (config.teamsMode) {
+    config.teamStrategies = Array.from({ length: config.teamCount }, () =>
+      Array.from({ length: config.robotsPerTeam }, () => STRATEGY_KEYS[Math.floor(Math.random() * STRATEGY_KEYS.length)])
+    );
+    buildTeamSlots();
+  } else {
+    config.strategies = Array.from({ length: config.robotCount }, () => STRATEGY_KEYS[Math.floor(Math.random() * STRATEGY_KEYS.length)]);
+    buildSlots();
+  }
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('fight').addEventListener('click', () => {
+  try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {}
+  newRound();
+  setup.hidden = true;
+  phase = 'battle';
+  cancelAnimationFrame(rafId);
+  last = performance.now();
+  rafId = requestAnimationFrame(frame);
+});
+
+let boardRows = [];
+let clock = null;
+let watchedRobot = null;
+
+function setWatched(r) {
+  watchedRobot = (watchedRobot === r) ? null : r;
+  document.getElementById('eyeview').hidden = !watchedRobot;
+  if (watchedRobot) document.getElementById('eyeview-name').textContent = watchedRobot.name;
+  for (const b of boardRows) b.eye?.classList.toggle('watching', b.robot === watchedRobot);
+}
+
+function clearWatched() {
+  watchedRobot = null;
+  document.getElementById('eyeview').hidden = true;
+  for (const b of boardRows) b.eye?.classList.remove('watching');
+}
+
+document.getElementById('eyeview-close').addEventListener('click', clearWatched);
+function buildBoard() {
+  board.innerHTML = '';
+  clock = document.createElement('div');
+  board.append(clock);
+  boardRows = [];
+  if (config.teamsMode) {
+    const groups = {};
+    for (const r of robots) (groups[r.teamId] ??= []).push(r);
+    for (const [teamId, members] of Object.entries(groups)) {
+      const team = TEAMS[teamId % TEAMS.length];
+      const hdr = document.createElement('div');
+      hdr.className = 'team-header';
+      hdr.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b>`;
+      board.append(hdr);
+      for (const r of members) {
+        const row = document.createElement('div');
+        row.innerHTML = `<span class="dot" style="background:${css(r.color)}"></span><span><b>${r.name}</b> · ${Strategies[r.strategy].name}</span><span class="hp"></span><button class="eye" title="Watch this robot">👁</button>`;
+        board.append(row);
+        const eye = row.querySelector('.eye');
+        eye.addEventListener('click', () => setWatched(r));
+        boardRows.push({ robot: r, row, hp: row.querySelector('.hp'), eye, shown: null });
+      }
+    }
+  } else {
+    for (const r of robots) {
+      const row = document.createElement('div');
+      row.innerHTML = `<span class="dot" style="background:${css(r.color)}"></span><span><b>${r.name}</b> · ${Strategies[r.strategy].name}</span><span class="hp"></span><button class="eye" title="Watch this robot">👁</button>`;
+      board.append(row);
+      const eye = row.querySelector('.eye');
+      eye.addEventListener('click', () => setWatched(r));
+      boardRows.push({ robot: r, row, hp: row.querySelector('.hp'), eye, shown: null });
+    }
+  }
+}
+
+function updateBoard() {
+  const left = Math.max(0, Math.ceil(ROUND_TIME - battleTime));
+  const clockText = `Time left ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  if (clock.textContent !== clockText) clock.textContent = clockText;
+  for (const b of boardRows) {
+    const gone = !robots.includes(b.robot) || b.robot.dying !== null;
+    const text = gone ? '♥ 0' : `♥ ${b.robot.hp}`;
+    if (text !== b.shown) {
+      b.hp.textContent = b.shown = text;
+      b.row.classList.toggle('dead', gone);
+    }
+  }
+  if (watchedRobot && (!robots.includes(watchedRobot) || watchedRobot.dying !== null)) clearWatched();
+}
+
+newRound();
+showSetup();
+
+// ---------- camera ----------
+let yaw = 0.5, pitch = 0.85, dist = 40, paused = false;
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', () => { drag = null; });
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  yaw -= (e.clientX - drag.x) * 0.008;
+  pitch = Math.max(0.3, Math.min(1.45, pitch + (e.clientY - drag.y) * 0.005));
+  drag = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  dist = Math.max(6, Math.min(60, dist * (1 + e.deltaY * 0.001)));
+}, { passive: false });
+addEventListener('keydown', (e) => {
+  if (e.target.closest('select, button, input')) return;
+  if (e.code === 'Escape' && phase !== 'setup' && confirm('Stop the current battle?')) { paused = false; showSetup(); }
+  if (e.code === 'Space') paused = !paused;
+  if (e.code === 'KeyM') muted = !muted;
+});
+
+// ---------- sound ----------
+let audio = null, noise = null, muted = false;
+function unlockAudio() {
+  if (!audio) {
+    audio = new AudioContext();
+    noise = audio.createBuffer(1, audio.sampleRate * 0.1, audio.sampleRate);
+    const d = noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  if (audio.state === 'suspended') audio.resume();
+}
+addEventListener('pointerdown', unlockAudio);
+addEventListener('keydown', unlockAudio);
+
+function playKlank() {
+  if (!audio || muted || audio.state !== 'running') return;
+  const now = audio.currentTime, pitch = 0.85 + Math.random() * 0.3;
+  const out = audio.createGain();
+  out.gain.value = 0.2;
+  out.connect(audio.destination);
+  for (const [freq, amp, decay] of [[410, 1, 0.35], [1090, 0.6, 0.25], [1730, 0.45, 0.18], [2650, 0.3, 0.12]]) {
+    const osc = audio.createOscillator(), g = audio.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq * pitch;
+    g.gain.setValueAtTime(amp, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
+    osc.connect(g).connect(out);
+    osc.start(now);
+    osc.stop(now + decay);
+  }
+  const strike = audio.createBufferSource(), band = audio.createBiquadFilter(), g = audio.createGain();
+  strike.buffer = noise;
+  band.type = 'bandpass';
+  band.frequency.value = 3000;
+  band.Q.value = 1.5;
+  g.gain.setValueAtTime(0.8, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+  strike.connect(band).connect(g).connect(out);
+  strike.start(now);
+}
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+// ---------- main loop ----------
+let last = performance.now(), simTime = 0, rafId = 0;
+function schedulePreview() {
+  cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(frame);
+}
+function frame(now) {
+  rafId = 0;
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!paused && phase !== 'setup') { update(dt); simTime += dt; }
+
+  resize();
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.8, 0.84, 0.9, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const eye = [Math.sin(yaw) * Math.cos(pitch) * dist, Math.sin(pitch) * dist, Math.cos(yaw) * Math.cos(pitch) * dist];
+  const view = mat4.lookAt(eye, [0, 0.4, 0], [0, 1, 0]);
+  const proj = mat4.perspective((35 * Math.PI) / 180, canvas.width / canvas.height, 0.5, 200);
+  gfx.begin(mat4.mul(proj, view), eye);
+  gfx.drawArena(ARENA);
+  gfx.drawWalls(WALLS);
+  for (const r of robots) gfx.drawRadar(r);
+  for (const r of robots) gfx.drawRobot(r, simTime);
+  for (const b of bullets) gfx.drawBullet(b);
+  for (const i of impacts) gfx.drawImpact(i);
+  for (const e of explosions) gfx.drawExplosion(e);
+
+  if (watchedRobot && robots.includes(watchedRobot) && watchedRobot.dying === null && phase === 'battle') {
+    const r = watchedRobot;
+    const sx = canvas.width / canvas.clientWidth, sy = canvas.height / canvas.clientHeight;
+    const pw = Math.round(260 * sx), ph = Math.round(160 * sy);
+    const px = canvas.width - pw - Math.round(12 * sx);
+    const py = Math.round(12 * sy);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(px, py, pw, ph);
+    gl.viewport(px, py, pw, ph);
+    gl.clearColor(0.12, 0.15, 0.22, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const eyePos = [r.x, 1.6, r.z];
+    const lookPt = [r.x + Math.sin(r.turret) * 10, 1.6, r.z + Math.cos(r.turret) * 10];
+    const eyeView = mat4.lookAt(eyePos, lookPt, [0, 1, 0]);
+    const eyeProj = mat4.perspective((65 * Math.PI) / 180, pw / ph, 0.3, 200);
+    gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
+    gfx.drawArena(ARENA);
+    gfx.drawWalls(WALLS);
+    for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
+    for (const b of bullets) gfx.drawBullet(b);
+    for (const i of impacts) gfx.drawImpact(i);
+    for (const e of explosions) gfx.drawExplosion(e);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+
+  if (phase !== 'setup') rafId = requestAnimationFrame(frame);
+}
+schedulePreview(); // initial arena preview
+</script>
+</body>
+</html>
