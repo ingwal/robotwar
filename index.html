@@ -79,6 +79,15 @@
           <option value="maze">Maze</option>
         </select>
       </label>
+      <label>Wall strength:
+        <select id="wallHp">
+          <option value="1">Flimsy (1 hit)</option>
+          <option value="2" selected>Normal (2 hits)</option>
+          <option value="4">Sturdy (4 hits)</option>
+          <option value="8">Tough (8 hits)</option>
+          <option value="0">Indestructible</option>
+        </select>
+      </label>
     </div>
   </div>
   <div class="mode-row">
@@ -164,9 +173,10 @@ const WALL_LAYOUTS = {
 };
 
 // Each wall is cut into roughly 1x1 blocks that can be shot to pieces one at a time.
-const WALL_HP = 2;
+// wallHp is the number of hits a block takes; 0 makes walls indestructible.
+const WALL_HP_CHOICES = [1, 2, 4, 8, 0];
 const BLOCK_SIZE = 1;
-function buildWalls(layoutKey, arena) {
+function buildWalls(layoutKey, arena, wallHp = 2) {
   const blocks = [];
   for (const [fx0, fz0, fx1, fz1] of WALL_LAYOUTS[layoutKey] ?? []) {
     const x0 = fx0 * arena, z0 = fz0 * arena, x1 = fx1 * arena, z1 = fz1 * arena;
@@ -176,7 +186,7 @@ function buildWalls(layoutKey, arena) {
         blocks.push({
           x0: x0 + ((x1 - x0) * i) / nx, x1: x0 + ((x1 - x0) * (i + 1)) / nx,
           z0: z0 + ((z1 - z0) * j) / nz, z1: z0 + ((z1 - z0) * (j + 1)) / nz,
-          hp: WALL_HP, maxHp: WALL_HP, seed: Math.random() * 10,
+          hp: wallHp || Infinity, maxHp: wallHp, seed: Math.random() * 10,
         });
   }
   return blocks;
@@ -189,7 +199,7 @@ let WALLS = buildWalls('cross', ARENA);
 const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
-  arenaSize: 14, layout: 'cross', shotsToKill: 6,
+  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2,
   teamsMode: false,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
@@ -202,6 +212,7 @@ try {
     if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
     if (saved.layout in WALL_LAYOUTS) config.layout = saved.layout;
     if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
+    if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
     if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
     if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
     if (Array.isArray(saved.strategies))
@@ -224,7 +235,7 @@ function newRound(cfg) {
   clearWatched();
   ARENA = cfg.arenaSize ?? 14;
   RADAR_RANGE = ARENA * (24 / 14);
-  WALLS = buildWalls(cfg.layout ?? 'cross', ARENA);
+  WALLS = buildWalls(cfg.layout ?? 'cross', ARENA, cfg.wallHp ?? 2);
 
   if (cfg.teamsMode) {
     const flat = [];
@@ -583,6 +594,7 @@ function showSetup() {
   document.getElementById('arenaSize').value = config.arenaSize;
   document.getElementById('arenaVal').textContent = config.arenaSize;
   document.getElementById('shotsToKill').value = config.shotsToKill;
+  document.getElementById('wallHp').value = config.wallHp;
   document.getElementById('layoutPick').value = config.layout;
   document.getElementById('teamsMode').checked = config.teamsMode;
   document.getElementById('robotCount').value = config.robotCount;
@@ -604,6 +616,12 @@ document.getElementById('arenaSize').addEventListener('input', (e) => {
 
 document.getElementById('shotsToKill').addEventListener('input', (e) => {
   config.shotsToKill = Math.max(1, Math.min(10, +e.target.value || 6));
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('wallHp').addEventListener('change', (e) => {
+  config.wallHp = +e.target.value;
   newRound();
   schedulePreview();
 });
