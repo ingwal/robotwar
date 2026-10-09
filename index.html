@@ -44,14 +44,15 @@
   #board .team-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; margin-top: 5px; }
   #board .eye { all: unset; cursor: pointer; font-size: 14px; opacity: 0.3; margin-left: 4px; line-height: 1; }
   #board .eye:hover, #board .eye.watching { opacity: 1; }
-  #eyeview { position: fixed; right: 12px; bottom: 12px; width: 260px; pointer-events: none; z-index: 10; }
-  #eyeview[hidden] { display: none; }
-  #eyeview-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  #eyepanel { position: fixed; right: 12px; top: 12px; bottom: 12px; width: 260px;
+              pointer-events: none; z-index: 10; display: flex; flex-direction: column; gap: 8px;
+              overflow: hidden; }
+  .eyeslot-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
                  background: rgba(255,255,255,0.9); color: #2a3347; border-radius: 8px 8px 0 0;
                  padding: 4px 10px; font-size: 12px; font-weight: 600; pointer-events: auto; }
-  #eyeview-bar button { all: unset; cursor: pointer; font-size: 13px; opacity: 0.5; }
-  #eyeview-bar button:hover { opacity: 1; }
-  #eyeview-port { height: 160px; border-radius: 0 0 8px 8px;
+  .eyeslot-bar button { all: unset; cursor: pointer; font-size: 13px; opacity: 0.5; }
+  .eyeslot-bar button:hover { opacity: 1; }
+  .eyeslot-port { height: 160px; border-radius: 0 0 8px 8px; flex-shrink: 0;
                   box-shadow: 0 6px 24px rgba(0,0,0,0.4), inset 0 0 0 1.5px rgba(255,255,255,0.2); }
 </style>
 </head>
@@ -60,10 +61,7 @@
 <div id="hud"><b>Robot War</b> · drag to orbit · scroll to zoom · space to pause · Esc to stop · M to mute · click once to enable sound</div>
 <div id="msg"></div>
 <div id="board" class="panel"></div>
-<div id="eyeview" hidden>
-  <div id="eyeview-bar"><span id="eyeview-name"></span><button id="eyeview-close" title="Close">✕</button></div>
-  <div id="eyeview-port"></div>
-</div>
+<div id="eyepanel"></div>
 <div id="setup" class="panel">
   <h2>Robot War</h2>
   <div class="config-section">
@@ -652,22 +650,41 @@ document.getElementById('fight').addEventListener('click', () => {
 
 let boardRows = [];
 let clock = null;
-let watchedRobot = null;
+let watchedRobots = [];
+
+function maxViewports() {
+  return Math.max(1, Math.floor((window.innerHeight - 24) / (26 + 160 + 8)));
+}
+
+function rebuildEyePanel() {
+  const panel = document.getElementById('eyepanel');
+  panel.innerHTML = '';
+  for (const r of watchedRobots) {
+    const slot = document.createElement('div');
+    slot.className = 'eyeslot';
+    slot.innerHTML = `<div class="eyeslot-bar"><span>${r.name}</span><button title="Close">✕</button></div><div class="eyeslot-port"></div>`;
+    slot.querySelector('button').addEventListener('click', () => setWatched(r));
+    panel.append(slot);
+  }
+}
 
 function setWatched(r) {
-  watchedRobot = (watchedRobot === r) ? null : r;
-  document.getElementById('eyeview').hidden = !watchedRobot;
-  if (watchedRobot) document.getElementById('eyeview-name').textContent = watchedRobot.name;
-  for (const b of boardRows) b.eye?.classList.toggle('watching', b.robot === watchedRobot);
+  const idx = watchedRobots.indexOf(r);
+  if (idx !== -1) {
+    watchedRobots.splice(idx, 1);
+  } else {
+    if (watchedRobots.length >= maxViewports()) watchedRobots.shift();
+    watchedRobots.push(r);
+  }
+  rebuildEyePanel();
+  for (const b of boardRows) b.eye?.classList.toggle('watching', watchedRobots.includes(b.robot));
 }
 
 function clearWatched() {
-  watchedRobot = null;
-  document.getElementById('eyeview').hidden = true;
+  watchedRobots = [];
+  rebuildEyePanel();
   for (const b of boardRows) b.eye?.classList.remove('watching');
 }
-
-document.getElementById('eyeview-close').addEventListener('click', clearWatched);
 function buildBoard() {
   board.innerHTML = '';
   clock = document.createElement('div');
@@ -715,7 +732,12 @@ function updateBoard() {
       b.row.classList.toggle('dead', gone);
     }
   }
-  if (watchedRobot && (!robots.includes(watchedRobot) || watchedRobot.dying !== null)) clearWatched();
+  const prevLen = watchedRobots.length;
+  watchedRobots = watchedRobots.filter((r) => robots.includes(r) && r.dying === null);
+  if (watchedRobots.length !== prevLen) {
+    rebuildEyePanel();
+    for (const b of boardRows) b.eye?.classList.toggle('watching', watchedRobots.includes(b.robot));
+  }
 }
 
 newRound();
@@ -803,13 +825,17 @@ function frame(now) {
   if (!paused && phase !== 'setup') { update(dt); simTime += dt; }
 
   resize();
+  const dpr = canvas.width / canvas.clientWidth;
+  const panelPx = watchedRobots.length > 0 ? Math.round(284 * dpr) : 0;
+  const mainW = canvas.width - panelPx;
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0.8, 0.84, 0.9, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.viewport(0, 0, mainW, canvas.height);
 
   const eye = [Math.sin(yaw) * Math.cos(pitch) * dist, Math.sin(pitch) * dist, Math.cos(yaw) * Math.cos(pitch) * dist];
   const view = mat4.lookAt(eye, [0, 0.4, 0], [0, 1, 0]);
-  const proj = mat4.perspective((35 * Math.PI) / 180, canvas.width / canvas.height, 0.5, 200);
+  const proj = mat4.perspective((35 * Math.PI) / 180, mainW / canvas.height, 0.5, 200);
   gfx.begin(mat4.mul(proj, view), eye);
   gfx.drawArena(ARENA);
   gfx.drawWalls(WALLS);
@@ -819,29 +845,36 @@ function frame(now) {
   for (const i of impacts) gfx.drawImpact(i);
   for (const e of explosions) gfx.drawExplosion(e);
 
-  if (watchedRobot && robots.includes(watchedRobot) && watchedRobot.dying === null && phase === 'battle') {
-    const r = watchedRobot;
+  if (watchedRobots.length > 0 && phase === 'battle') {
     const sx = canvas.width / canvas.clientWidth, sy = canvas.height / canvas.clientHeight;
-    const pw = Math.round(260 * sx), ph = Math.round(160 * sy);
-    const px = canvas.width - pw - Math.round(12 * sx);
-    const py = Math.round(12 * sy);
-    gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(px, py, pw, ph);
-    gl.viewport(px, py, pw, ph);
-    gl.clearColor(0.12, 0.15, 0.22, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const eyePos = [r.x, 1.6, r.z];
-    const lookPt = [r.x + Math.sin(r.turret) * 10, 1.6, r.z + Math.cos(r.turret) * 10];
-    const eyeView = mat4.lookAt(eyePos, lookPt, [0, 1, 0]);
-    const eyeProj = mat4.perspective((65 * Math.PI) / 180, pw / ph, 0.3, 200);
-    gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
-    gfx.drawArena(ARENA);
-    gfx.drawWalls(WALLS);
-    for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
-    for (const b of bullets) gfx.drawBullet(b);
-    for (const i of impacts) gfx.drawImpact(i);
-    for (const e of explosions) gfx.drawExplosion(e);
-    gl.disable(gl.SCISSOR_TEST);
+    const ports = document.getElementById('eyepanel').querySelectorAll('.eyeslot-port');
+    for (let vi = 0; vi < watchedRobots.length; vi++) {
+      const r = watchedRobots[vi];
+      const port = ports[vi];
+      if (!port) continue;
+      const rect = port.getBoundingClientRect();
+      const pw = Math.round(rect.width * sx), ph = Math.round(rect.height * sy);
+      const px = Math.round(rect.left * sx);
+      const py = Math.round(canvas.height - rect.bottom * sy);
+      if (pw <= 0 || ph <= 0 || py < 0 || px < 0 || px + pw > canvas.width || py + ph > canvas.height) continue;
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(px, py, pw, ph);
+      gl.viewport(px, py, pw, ph);
+      gl.clearColor(0.12, 0.15, 0.22, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      const eyePos = [r.x, 1.6, r.z];
+      const lookPt = [r.x + Math.sin(r.turret) * 10, 1.6, r.z + Math.cos(r.turret) * 10];
+      const eyeView = mat4.lookAt(eyePos, lookPt, [0, 1, 0]);
+      const eyeProj = mat4.perspective((65 * Math.PI) / 180, pw / ph, 0.3, 200);
+      gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
+      gfx.drawArena(ARENA);
+      gfx.drawWalls(WALLS);
+      for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
+      for (const b of bullets) gfx.drawBullet(b);
+      for (const i of impacts) gfx.drawImpact(i);
+      for (const e of explosions) gfx.drawExplosion(e);
+      gl.disable(gl.SCISSOR_TEST);
+    }
     gl.viewport(0, 0, canvas.width, canvas.height);
   }
 
