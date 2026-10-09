@@ -163,6 +163,77 @@
         return { moveTo: m.goal, aim: seen ? seen.angle + shaky : null, fire: !!seen };
       },
     },
+
+    // After Richard A. Fowell's NORDEN+, winner of Computer Gaming World's ROBOTWAR tournament.
+    norden: {
+      name: 'NORDEN+',
+      description: 'Tournament champion from the original game. Hides in a corner and scans only the quarter of the arena in front of it, homes in with a fine scan, and leads its shots. Once hit, it moves from corner to corner along the edge and turns back each time it is hit again.',
+      think(me, world) {
+        const m = me.mem, c = world.arena - 1.2;
+        const corners = [{ x: -c, z: -c }, { x: c, z: -c }, { x: c, z: c }, { x: -c, z: c }];
+        if (m.corner === undefined) {
+          m.corner = corners.reduce((best, p, i) => (dist(me, p) < dist(me, corners[best]) ? i : best), 0);
+          m.dir = 1;
+        }
+
+        // Sit in the corner until the first hit, then patrol corner to corner; every later hit reverses.
+        const hurt = m.lastHp !== undefined && me.hp < m.lastHp;
+        m.lastHp = me.hp;
+        if (hurt) { if (m.patrol) m.dir = -m.dir; m.patrol = true; m.corner = (m.corner + m.dir + 4) % 4; }
+        else if (me.blocked && !m.wasBlocked) { m.dir = -m.dir; m.corner = (m.corner + m.dir + 4) % 4; }
+        else if (m.patrol && dist(me, corners[m.corner]) < 1) m.corner = (m.corner + m.dir + 4) % 4;
+        m.wasBlocked = me.blocked;
+
+        // Radar: sweep only the 90-degree quadrant facing the middle of the arena. After a contact,
+        // probe left and right of it in steps that get finer with range (850 / R in the original).
+        const facing = angleTo(me, { x: 0, z: 0 });
+        let hit = null;
+        if (m.lock) {
+          // Probe centre, right, left with a narrow beam and nudge toward whatever answers; each
+          // miss widens the probe, and after ten misses in a row go back to sweeping.
+          const step = Math.min(0.08, 0.6 / m.lock.dist) * (1 + m.misses / 2);
+          const off = [0, step, -step][(m.probe = (m.probe + 1) % 3)];
+          hit = world.scan(m.lock.angle + off, 0.03);
+          if (hit && !hit.friendly) { m.lock.angle += off / 2; m.lock.dist = hit.dist; m.misses = 0; }
+          else { hit = null; if (++m.misses > 10) m.lock = null; }
+        } else {
+          m.sweep = ((m.sweep ?? -1) + 0.16 > 1 ? -1 : (m.sweep ?? -1) + 0.16);
+          const a = facing + m.sweep * Math.PI / 4;
+          hit = world.scan(a, 0.17);
+          if (hit && !hit.friendly) { m.lock = { angle: a, dist: hit.dist }; m.probe = 0; m.misses = 0; m.fixes = []; }
+          else hit = null;
+        }
+
+        // Lead: fit a straight line through the last 0.8 s of radar fixes to get the target's
+        // position and velocity, then aim where it will be when the shell gets there.
+        if (hit) {
+          m.fixes = (m.fixes ?? []).filter((f) => world.time - f.t < 0.8);
+          m.fixes.push({ ...pointAt(me, m.lock.angle, m.lock.dist), t: world.time });
+        }
+        let aim = null, fire = false;
+        const fixes = m.fixes ?? [];
+        if (m.lock && fixes.length && world.time - fixes[fixes.length - 1].t < 0.4) {
+          const n = fixes.length, mt = fixes.reduce((s, f) => s + f.t, 0) / n;
+          const mx = fixes.reduce((s, f) => s + f.x, 0) / n, mz = fixes.reduce((s, f) => s + f.z, 0) / n;
+          const stt = fixes.reduce((s, f) => s + (f.t - mt) ** 2, 0);
+          let vx = 0, vz = 0;
+          if (n >= 5 && fixes[n - 1].t - fixes[0].t > 0.3) {
+            vx = fixes.reduce((s, f) => s + (f.t - mt) * (f.x - mx), 0) / stt;
+            vz = fixes.reduce((s, f) => s + (f.t - mt) * (f.z - mz), 0) / stt;
+            const v = Math.hypot(vx, vz), vmax = 2.4; // no robot drives faster than this
+            if (v > vmax) { vx *= vmax / v; vz *= vmax / v; }
+          }
+          let target = { x: mx, z: mz };
+          for (let i = 0; i < 3; i++) {
+            const t = world.time - mt + dist(me, target) / world.bulletSpeed;
+            target = { x: mx + vx * t, z: mz + vz * t };
+          }
+          aim = angleTo(me, target);
+          fire = true;
+        }
+        return { moveTo: corners[m.corner], aim, fire };
+      },
+    },
   };
 
   global.Strategies = STRATEGIES;
