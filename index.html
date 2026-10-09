@@ -71,6 +71,14 @@
       </label>
       <label>Shots to kill: <input type="number" id="shotsToKill" min="1" max="10" value="6"></label>
       <label>Land mines: <input type="number" id="mineCount" min="0" max="30" value="0"></label>
+      <label>Mine strength:
+        <select id="mineDamage">
+          <option value="1">Weak (1 hit)</option>
+          <option value="2" selected>Normal (2 hits)</option>
+          <option value="4">Strong (4 hits)</option>
+          <option value="0">Deadly</option>
+        </select>
+      </label>
       <label>Obstacles:
         <select id="layoutPick">
           <option value="open">Open</option>
@@ -126,7 +134,7 @@ const BULLET_SPEED = 16;
 const ROUND_TIME = 180;
 const DEATH_TIME = 0.7;
 const ROBOT_RADIUS = 0.7;
-const MINE_DAMAGE = 2;      // hit points taken from every robot inside the blast
+const MINE_DAMAGE_CHOICES = [1, 2, 4, 0]; // hits a blast deals to robots and wall blocks; 0 = deadly
 const MINE_BLAST = 2.2;     // blast radius
 const MINE_TRIGGER = 0.8;   // a robot this close to a mine sets it off
 
@@ -203,7 +211,7 @@ let WALLS = buildWalls('cross', ARENA);
 const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
-  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0,
+  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2,
   teamsMode: false,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
@@ -218,6 +226,7 @@ try {
     if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
     if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
     if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
+    if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
     if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
     if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
     if (Array.isArray(saved.strategies))
@@ -282,28 +291,28 @@ function newRound(cfg) {
     });
   }
   bullets = []; explosions = []; impacts = []; crumbles = [];
-  mines = placeMines(cfg.mineCount ?? 0);
+  mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
   battleTime = 0;
   msg.textContent = '';
   buildBoard();
 }
 
 // Scatter mines on open floor, away from walls, from where the robots start and from each other.
-function placeMines(count) {
+function placeMines(count, damage) {
   const placed = [], lim = ARENA - 1.5;
   for (let tries = 0; placed.length < count && tries < count * 200; tries++) {
     const p = { x: (Math.random() * 2 - 1) * lim, z: (Math.random() * 2 - 1) * lim };
     if (WALLS.some((w) => p.x > w.x0 - 1 && p.x < w.x1 + 1 && p.z > w.z0 - 1 && p.z < w.z1 + 1)) continue;
     if (robots.some((r) => Math.hypot(r.x - p.x, r.z - p.z) < 3.5)) continue;
     if (placed.some((m) => Math.hypot(m.x - p.x, m.z - p.z) < 1.8)) continue;
-    placed.push({ ...p, seed: Math.random() * 10 });
+    placed.push({ ...p, damage: damage || Infinity, seed: Math.random() * 10 });
   }
   return placed;
 }
 
 // Knock a hit off a wall block; at zero it crumbles away.
-function damageBlock(block) {
-  if (--block.hp > 0) return;
+function damageBlock(block, hits = 1) {
+  if (block.hp === Infinity || (block.hp -= hits) > 0) return; // Infinity = indestructible
   WALLS.splice(WALLS.indexOf(block), 1);
   crumbles.push({ ...block, age: 0 });
   playCrumble();
@@ -316,12 +325,12 @@ function detonate(mine) {
   for (const r of robots) {
     if (r.dying !== null || Math.hypot(r.x - mine.x, r.z - mine.z) > MINE_BLAST) continue;
     r.hit = 1;
-    r.hp = Math.max(0, r.hp - MINE_DAMAGE);
+    r.hp = Math.max(0, r.hp - mine.damage);
     if (r.hp === 0) r.dying = 0;
   }
   for (const w of WALLS.slice()) {
     const cx = clamp(mine.x, w.x0, w.x1), cz = clamp(mine.z, w.z0, w.z1);
-    if (Math.hypot(cx - mine.x, cz - mine.z) < MINE_BLAST) damageBlock(w);
+    if (Math.hypot(cx - mine.x, cz - mine.z) < MINE_BLAST) damageBlock(w, mine.damage);
   }
 }
 
@@ -640,6 +649,7 @@ function showSetup() {
   document.getElementById('arenaVal').textContent = config.arenaSize;
   document.getElementById('shotsToKill').value = config.shotsToKill;
   document.getElementById('mineCount').value = config.mineCount;
+  document.getElementById('mineDamage').value = config.mineDamage;
   document.getElementById('wallHp').value = config.wallHp;
   document.getElementById('layoutPick').value = config.layout;
   document.getElementById('teamsMode').checked = config.teamsMode;
@@ -668,6 +678,12 @@ document.getElementById('shotsToKill').addEventListener('input', (e) => {
 
 document.getElementById('mineCount').addEventListener('input', (e) => {
   config.mineCount = Math.max(0, Math.min(30, Math.floor(+e.target.value) || 0));
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('mineDamage').addEventListener('change', (e) => {
+  config.mineDamage = +e.target.value;
   newRound();
   schedulePreview();
 });
