@@ -193,7 +193,7 @@ function buildWalls(layoutKey, arena, wallHp = 2) {
 }
 
 let ARENA = 14;
-let RADAR_RANGE = ARENA * (24 / 14);
+let RADAR_RANGE = ARENA * 2 * Math.SQRT2;
 let WALLS = buildWalls('cross', ARENA);
 
 const STRATEGY_KEYS = Object.keys(Strategies);
@@ -234,7 +234,7 @@ function newRound(cfg) {
   cfg = cfg ?? config;
   clearWatched();
   ARENA = cfg.arenaSize ?? 14;
-  RADAR_RANGE = ARENA * (24 / 14);
+  RADAR_RANGE = ARENA * 2 * Math.SQRT2;
   WALLS = buildWalls(cfg.layout ?? 'cross', ARENA, cfg.wallHp ?? 2);
 
   if (cfg.teamsMode) {
