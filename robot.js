@@ -11,6 +11,7 @@
 //   gfx.drawRadar(robot);                          // the robot's last radar scan, if any (robot.scan)
 //   gfx.drawImpact({ x, y, z, age });               // bullet hitting a wall; done after IMPACT_TIME
 //   gfx.drawCrumble({ x0, z0, x1, z1, seed, age }); // a wall block falling apart; done after CRUMBLE_TIME
+//   gfx.drawMine({ x, z, seed }, time);             // a land mine on the floor
 //
 // ROBOT STATE (all optional except x, z, heading, turret, color):
 //   x, z       position on the ground plane
@@ -549,6 +550,15 @@ void main() {
       }
     }
 
+    // A land mine: a squat dark disc with a little red light that blinks. m = { x, z, seed }.
+    function drawMine(m, time) {
+      flash = 0;
+      draw(M.cyl, chain(translate(m.x, 0.06, m.z), scale(0.34, 0.12, 0.34)), [0.25, 0.27, 0.22]);
+      draw(M.cyl, chain(translate(m.x, 0.13, m.z), scale(0.2, 0.04, 0.2)), METAL);
+      const on = (time * 1.5 + (m.seed ?? 0)) % 1 < 0.25;
+      draw(M.sphere, chain(translate(m.x, 0.17, m.z), scale(0.06)), on ? [1, 0.15, 0.1] : [0.35, 0.08, 0.06], on ? 1 : 0);
+    }
+
     // A wall block collapsing: chunks pop up, tumble and fall, and a pile of rubble settles and
     // fades. c = { x0, z0, x1, z1, maxHp, seed, age }; finished when age >= CRUMBLE_TIME.
     function drawCrumble(c) {
@@ -573,7 +583,7 @@ void main() {
       }
     }
 
-    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawShadow };
+    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow };
   }
 
   global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, WALL_HEIGHT };

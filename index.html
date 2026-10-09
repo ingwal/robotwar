@@ -70,6 +70,7 @@
         <input type="range" id="arenaSize" min="10" max="30" value="14" step="1">
       </label>
       <label>Shots to kill: <input type="number" id="shotsToKill" min="1" max="10" value="6"></label>
+      <label>Land mines: <input type="number" id="mineCount" min="0" max="30" value="0"></label>
       <label>Obstacles:
         <select id="layoutPick">
           <option value="open">Open</option>
@@ -125,6 +126,9 @@ const BULLET_SPEED = 16;
 const ROUND_TIME = 180;
 const DEATH_TIME = 0.7;
 const ROBOT_RADIUS = 0.7;
+const MINE_DAMAGE = 2;      // hit points taken from every robot inside the blast
+const MINE_BLAST = 2.2;     // blast radius
+const MINE_TRIGGER = 0.8;   // a robot this close to a mine sets it off
 
 const TEAMS = [
   { name: 'Coral',  color: [1.0,  0.45, 0.40] },
@@ -199,7 +203,7 @@ let WALLS = buildWalls('cross', ARENA);
 const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
-  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2,
+  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0,
   teamsMode: false,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
@@ -213,6 +217,7 @@ try {
     if (saved.layout in WALL_LAYOUTS) config.layout = saved.layout;
     if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
     if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
+    if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
     if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
     if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
     if (Array.isArray(saved.strategies))
@@ -227,7 +232,7 @@ try {
 } catch {}
 
 let phase = 'setup';
-let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], roundOverTimer = 0, battleTime = 0;
+let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], roundOverTimer = 0, battleTime = 0;
 const msg = document.getElementById('msg');
 
 function newRound(cfg) {
@@ -277,9 +282,47 @@ function newRound(cfg) {
     });
   }
   bullets = []; explosions = []; impacts = []; crumbles = [];
+  mines = placeMines(cfg.mineCount ?? 0);
   battleTime = 0;
   msg.textContent = '';
   buildBoard();
+}
+
+// Scatter mines on open floor, away from walls, from where the robots start and from each other.
+function placeMines(count) {
+  const placed = [], lim = ARENA - 1.5;
+  for (let tries = 0; placed.length < count && tries < count * 200; tries++) {
+    const p = { x: (Math.random() * 2 - 1) * lim, z: (Math.random() * 2 - 1) * lim };
+    if (WALLS.some((w) => p.x > w.x0 - 1 && p.x < w.x1 + 1 && p.z > w.z0 - 1 && p.z < w.z1 + 1)) continue;
+    if (robots.some((r) => Math.hypot(r.x - p.x, r.z - p.z) < 3.5)) continue;
+    if (placed.some((m) => Math.hypot(m.x - p.x, m.z - p.z) < 1.8)) continue;
+    placed.push({ ...p, seed: Math.random() * 10 });
+  }
+  return placed;
+}
+
+// Knock a hit off a wall block; at zero it crumbles away.
+function damageBlock(block) {
+  if (--block.hp > 0) return;
+  WALLS.splice(WALLS.indexOf(block), 1);
+  crumbles.push({ ...block, age: 0 });
+  playCrumble();
+}
+
+function detonate(mine) {
+  mines.splice(mines.indexOf(mine), 1);
+  explosions.push({ x: mine.x, z: mine.z, age: 0, color: [0.3, 0.32, 0.28], seed: mine.seed });
+  playBoom();
+  for (const r of robots) {
+    if (r.dying !== null || Math.hypot(r.x - mine.x, r.z - mine.z) > MINE_BLAST) continue;
+    r.hit = 1;
+    r.hp = Math.max(0, r.hp - MINE_DAMAGE);
+    if (r.hp === 0) r.dying = 0;
+  }
+  for (const w of WALLS.slice()) {
+    const cx = clamp(mine.x, w.x0, w.x1), cz = clamp(mine.z, w.z0, w.z1);
+    if (Math.hypot(cx - mine.x, cz - mine.z) < MINE_BLAST) damageBlock(w);
+  }
 }
 
 const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
@@ -462,6 +505,12 @@ function update(dt) {
     r.stuckTime = wanted > 0.005 && moved < wanted * 0.3 ? r.stuckTime + dt : 0;
     r.blocked = r.stuckTime > 0.5;
   }
+  if (phase === 'battle')
+    for (const r of robots) {
+      if (r.dying !== null) continue;
+      const mine = mines.find((m) => Math.hypot(m.x - r.x, m.z - r.z) < MINE_TRIGGER);
+      if (mine) detonate(mine);
+    }
 
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
@@ -472,11 +521,7 @@ function update(dt) {
       impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
       dead = true;
     }
-    if (block && --block.hp <= 0) {
-      WALLS.splice(WALLS.indexOf(block), 1);
-      crumbles.push({ ...block, age: 0 });
-      playCrumble();
-    }
+    if (block) damageBlock(block);
     for (const r of robots) {
       if (r === b.owner || dead || r.dying !== null) continue;
       if (r.teamId === b.owner.teamId) continue;
@@ -594,6 +639,7 @@ function showSetup() {
   document.getElementById('arenaSize').value = config.arenaSize;
   document.getElementById('arenaVal').textContent = config.arenaSize;
   document.getElementById('shotsToKill').value = config.shotsToKill;
+  document.getElementById('mineCount').value = config.mineCount;
   document.getElementById('wallHp').value = config.wallHp;
   document.getElementById('layoutPick').value = config.layout;
   document.getElementById('teamsMode').checked = config.teamsMode;
@@ -616,6 +662,12 @@ document.getElementById('arenaSize').addEventListener('input', (e) => {
 
 document.getElementById('shotsToKill').addEventListener('input', (e) => {
   config.shotsToKill = Math.max(1, Math.min(10, +e.target.value || 6));
+  newRound();
+  schedulePreview();
+});
+
+document.getElementById('mineCount').addEventListener('input', (e) => {
+  config.mineCount = Math.max(0, Math.min(30, Math.floor(+e.target.value) || 0));
   newRound();
   schedulePreview();
 });
@@ -818,6 +870,22 @@ function unlockAudio() {
 addEventListener('pointerdown', unlockAudio);
 addEventListener('keydown', unlockAudio);
 
+// A deep thump with a noisy crack on top, for a mine going off.
+function playBoom() {
+  if (!audio || muted || audio.state !== 'running') return;
+  const now = audio.currentTime;
+  const osc = audio.createOscillator(), g = audio.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(110, now);
+  osc.frequency.exponentialRampToValueAtTime(35, now + 0.5);
+  g.gain.setValueAtTime(0.6, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+  osc.connect(g).connect(audio.destination);
+  osc.start(now);
+  osc.stop(now + 0.6);
+  playCrumble();
+}
+
 // A low, crunchy rumble of filtered noise for a wall block collapsing.
 function playCrumble() {
   if (!audio || muted || audio.state !== 'running') return;
@@ -895,6 +963,7 @@ function frame(now) {
   gfx.begin(mat4.mul(proj, view), eye);
   gfx.drawArena(ARENA);
   gfx.drawWalls(WALLS);
+  for (const m of mines) gfx.drawMine(m, simTime);
   for (const r of robots) gfx.drawRadar(r);
   for (const r of robots) gfx.drawRobot(r, simTime);
   for (const b of bullets) gfx.drawBullet(b);
@@ -926,6 +995,7 @@ function frame(now) {
       gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
       gfx.drawArena(ARENA);
       gfx.drawWalls(WALLS);
+      for (const m of mines) gfx.drawMine(m, simTime);
       for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
       for (const b of bullets) gfx.drawBullet(b);
       for (const i of impacts) gfx.drawImpact(i);
