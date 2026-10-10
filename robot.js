@@ -637,9 +637,25 @@ void main() {
       draw(M.sphere, chain(translate(i.x, i.y, i.z), scale(0.08 + 0.25 * (1 - k))), FLASH, k);
     }
 
+    function drawShell(b) {
+      flash = 0;
+      drawShadow(b.x, b.z, 0.25, 0.25 * Math.min(1, b.y * 0.4));
+      draw(M.sphere, chain(translate(b.x, b.y, b.z), scale(0.22)), [0.32, 0.30, 0.26]);
+      const g = b.gravity ?? 10;
+      for (let i = 1; i <= 7; i++) {
+        const td = i * 0.05;
+        const tx = b.x - b.vx * td, tz = b.z - b.vz * td;
+        const ty = b.y - (b.vy ?? 0) * td - 0.5 * g * td * td;
+        if (ty < 0) break;
+        drawGlow(M.sphere, chain(translate(tx, Math.max(0.05, ty), tz), scale(0.07 + i * 0.025)),
+          [0.55, 0.52, 0.48], (1 - i / 8) * 0.45, 5);
+      }
+    }
+
     // A little missile pointing the way it flies, with a flickering flame and a smoke trail
     // that never reaches back past the launch point (x0, z0).
     function drawBullet(b) {
+      if (b.howitzer) { drawShell(b); return; }
       const yaw = Math.atan2(b.vx, b.vz), dx = Math.sin(yaw), dz = Math.cos(yaw);
       const at = (d, y = b.y) => translate(b.x + dx * d, y, b.z + dz * d);
       const flown = b.x0 === undefined ? 3 : Math.hypot(b.x - b.x0, b.z - b.z0);
@@ -672,28 +688,29 @@ void main() {
       draw(M.sphere, chain(at(-0.33), rotY(yaw), scale(0.055 * flick(0), 0.055 * flick(0), 0.09)), [1, 0.95, 0.7], 1);
     }
 
-    // Fireball plus flying scrap. e = { x, z, age, color, seed }; finished when age >= EXPLOSION_TIME.
+    // Fireball plus flying scrap. e = { x, z, age, color, seed, scale? }; finished when age >= EXPLOSION_TIME.
     function drawExplosion(e) {
       const { x, z, age } = e;
       const seed = e.seed ?? 0;
+      const s = e.scale ?? 1;
       const fade = Math.max(0, 1 - age / EXPLOSION_TIME);
       flash = 0;
-      drawShadow(x, z, 1.3, 0.55 * fade);
+      drawShadow(x, z, 1.3 * s, 0.55 * fade);
 
       const ball = age < 0.12 ? age / 0.12 : Math.max(0, 1 - (age - 0.12) / 0.4);
       if (ball > 0) {
         const heat = Math.min(1, age / 0.4);
-        draw(M.sphere, chain(translate(x, 0.9, z), scale(1.3 * ball)), FLASH.map((v, i) => v + (FIRE[i] - v) * heat), 1);
+        draw(M.sphere, chain(translate(x, 0.9 * s, z), scale(1.3 * s * ball)), FLASH.map((v, i) => v + (FIRE[i] - v) * heat), 1);
       }
 
       const shrink = Math.min(1, (EXPLOSION_TIME - age) / 0.3);
       const colors = [e.color, TREAD, METAL];
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2 + seed;
-        const hs = 2 + ((i * 7) % 5) * 0.5, vy = 3 + ((i * 3) % 4);
-        const y = Math.max(0.08, 0.9 + vy * age - 4.9 * age * age);
+        const hs = (2 + ((i * 7) % 5) * 0.5) * s, vy = (3 + ((i * 3) % 4)) * s;
+        const y = Math.max(0.08, 0.9 * s + vy * age - 4.9 * age * age);
         const m = chain(translate(x + Math.cos(a) * hs * age, y, z + Math.sin(a) * hs * age),
-          rotX(age * (5 + i)), rotZ(age * (3 + i)), scale(0.17 * shrink));
+          rotX(age * (5 + i)), rotZ(age * (3 + i)), scale(0.17 * s * shrink));
         draw(M.cube, m, colors[i % 3]);
       }
     }

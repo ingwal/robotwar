@@ -150,6 +150,11 @@ const MINE_DAMAGE_CHOICES = [1, 2, 4, 0]; // hits a blast deals to robots and wa
 const MINE_BLAST = 2.2;     // blast radius
 const MINE_TRIGGER = 0.8;   // a robot this close to a mine sets it off
 
+const HOWITZER_SPEED = 20;     // muzzle velocity (units/s)
+const HOWITZER_GRAVITY = 10;   // gravity (units/s²) — no air resistance
+const HOWITZER_BLAST = 3.0;    // landing explosion radius
+const HOWITZER_COOLDOWN = 5;   // reload time (seconds)
+
 const TEAMS = [
   { name: 'Coral',  color: [1.0,  0.45, 0.40] },
   { name: 'Teal',   color: [0.25, 0.75, 0.72] },
@@ -387,7 +392,7 @@ function newRound(cfg) {
         heading: a + Math.PI, turret: a + Math.PI,
         seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
         hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
-        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, scan: null, stuckTime: 0, blocked: false,
+        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, howCooldown: 0, scan: null, stuckTime: 0, blocked: false,
         wallHit: false, robotHit: false, hitAngle: 0,
       };
     });
@@ -404,7 +409,7 @@ function newRound(cfg) {
         heading: a + Math.PI, turret: a + Math.PI,
         seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
         hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
-        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, scan: null, stuckTime: 0, blocked: false,
+        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, howCooldown: 0, scan: null, stuckTime: 0, blocked: false,
         wallHit: false, robotHit: false, hitAngle: 0,
       };
     });
@@ -587,6 +592,43 @@ function fire(r) {
   });
 }
 
+function fireHowitzer(r, tx, tz) {
+  const dx = tx - r.x, dz = tz - r.z;
+  const range = Math.hypot(dx, dz);
+  if (range < 1) return;
+  const sinVal = range * HOWITZER_GRAVITY / (HOWITZER_SPEED * HOWITZER_SPEED);
+  if (sinVal > 1) return;
+  const theta = Math.PI / 2 - Math.asin(sinVal) / 2;
+  const vh = HOWITZER_SPEED * Math.cos(theta);
+  const vy0 = HOWITZER_SPEED * Math.sin(theta);
+  const vx = (dx / range) * vh, vz = (dz / range) * vh;
+  bullets.push({
+    x: r.x, z: r.z, y: 1.2, x0: r.x, z0: r.z,
+    vx, vz, vy: vy0, gravity: HOWITZER_GRAVITY,
+    owner: r, color: r.color, howitzer: true,
+    life: 2 * vy0 / HOWITZER_GRAVITY + 0.5,
+  });
+  r.howCooldown = HOWITZER_COOLDOWN;
+}
+
+function landHowitzer(b) {
+  if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA) return;
+  playBoom();
+  explosions.push({ x: b.x, z: b.z, age: 0, color: b.color, seed: Math.random() * 10, scale: 2.0 });
+  for (const r of robots) {
+    if (r.dying !== null || r.teamId === b.owner.teamId) continue;
+    if (Math.hypot(r.x - b.x, r.z - b.z) < HOWITZER_BLAST) {
+      r.hit = 1; playMissileHit();
+      r.hp -= 1;
+      if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
+    }
+  }
+  for (const w of WALLS.slice()) {
+    const cx = clamp(b.x, w.x0, w.x1), cz = clamp(b.z, w.z0, w.z1);
+    if (Math.hypot(cx - b.x, cz - b.z) < HOWITZER_BLAST) damageBlock(w);
+  }
+}
+
 function drive(r, goal, speedFactor, dt) {
   const before = r.heading;
   let targetSpeed = 0;
@@ -694,6 +736,14 @@ function think(r) {
     scan: (angle, width) => (scanned ? null : ((scanned = true), scan(r, angle, width))),
     wallDist: (angle) => rayLength(r.x, r.z, angle, RADAR_RANGE),
     radio,
+    howitzer: {
+      ready: r.howCooldown <= 0,
+      maxRange: HOWITZER_SPEED ** 2 / HOWITZER_GRAVITY,
+      canReach: (tx, tz) => {
+        const d = Math.hypot(tx - r.x, tz - r.z);
+        return d >= 1 && d * HOWITZER_GRAVITY <= HOWITZER_SPEED ** 2;
+      },
+    },
   };
   try {
     return Strategies[r.strategy].think(r, world) || {};
@@ -713,6 +763,7 @@ function update(dt) {
     r.recoil = r.recoil.map((v) => Math.max(0, v - dt * 3));
     r.hit = Math.max(0, r.hit - dt * 4);
     r.cooldown -= dt;
+    r.howCooldown = Math.max(0, (r.howCooldown ?? 0) - dt);
     if (r.scan) r.scan.age += dt;
     r.lastX = r.x; r.lastZ = r.z;
     if (r.dying !== null) {
@@ -727,6 +778,8 @@ function update(dt) {
       r.turret = turnToward(r.turret, cmd.aim, 3 * dt);
       if (cmd.fire && r.cooldown <= 0 && Math.abs(angDiff(r.turret, cmd.aim)) < 0.08) fire(r);
     }
+    if (cmd.fireHowitzer && r.howCooldown <= 0)
+      fireHowitzer(r, cmd.fireHowitzer.x, cmd.fireHowitzer.z);
   }
 
   for (let i = robots.length - 1; i >= 0; i--) {
@@ -780,22 +833,28 @@ function update(dt) {
     const b = bullets[i];
     b.x += b.vx * dt; b.z += b.vz * dt; b.life -= dt;
     let dead = b.life <= 0;
-    const block = WALLS.find((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1);
-    if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || block) {
-      impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
-      dead = true;
-    }
-    if (block) damageBlock(block);
-    for (const r of robots) {
-      if (r === b.owner || dead || r.dying !== null) continue;
-      if (r.teamId === b.owner.teamId) continue;
-      if (Math.hypot(r.x - b.x, r.z - b.z) < 0.7) {
-        r.hit = 1;
-        playMissileHit();
-        r.hp -= 1;
-        if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
-        r.x += b.vx * 0.02; r.z += b.vz * 0.02;
+    if (b.howitzer) {
+      b.y += b.vy * dt;
+      b.vy -= HOWITZER_GRAVITY * dt;
+      if (!dead && b.y <= 0 && b.vy < 0) { landHowitzer(b); dead = true; }
+    } else {
+      const block = WALLS.find((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1);
+      if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || block) {
+        impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
         dead = true;
+      }
+      if (block) damageBlock(block);
+      for (const r of robots) {
+        if (r === b.owner || dead || r.dying !== null) continue;
+        if (r.teamId === b.owner.teamId) continue;
+        if (Math.hypot(r.x - b.x, r.z - b.z) < 0.7) {
+          r.hit = 1;
+          playMissileHit();
+          r.hp -= 1;
+          if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
+          r.x += b.vx * 0.02; r.z += b.vz * 0.02;
+          dead = true;
+        }
       }
     }
     if (dead) bullets.splice(i, 1);

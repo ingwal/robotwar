@@ -31,10 +31,14 @@
 //                           radio.send({ type, ...data })  broadcast to all living teammates
 //                         message type used by built-in strategies:
 //                           { type: 'enemy', x, z }  enemy spotted at world position x, z
+//              howitzer   { ready, maxRange, canReach(x,z) } — howitzer weapon info;
+//                           canReach returns true if the position is within firing range
 //   moveTo   {x, z} to drive to, or null to stand still
 //   speed    0..1.3, fraction of normal top speed (default 1)
 //   aim      world angle for the turret, or null to leave it where it is
 //   fire     true = shoot as soon as the cannon is reloaded and the turret is on target
+//   fireHowitzer  { x, z } to lob a howitzer shell at that world position (area damage on landing);
+//                 only fires if world.howitzer.ready and target is in range
 //
 // Angles: 0 = +z, PI/2 = +x. From the default camera, +z is the bottom of the screen and
 // -z is the top, so "straight up the screen" is PI.
@@ -81,6 +85,15 @@
     }
   }
 
+  // Return { fireHowitzer: tip } if the howitzer is ready and can reach the latest radio tip, else {}.
+  function howitzerAtTip(me, world) {
+    if (!world.howitzer.ready) return {};
+    const tip = radioEnemyTip(world);
+    if (!tip) return {};
+    if (!world.howitzer.canReach(tip.x, tip.z)) return {};
+    return { fireHowitzer: tip };
+  }
+
   // Sweep the radar round and round until it finds an enemy, then switch to a narrow beam
   // and keep it on the target by probing just left and right of it, nudging toward whichever
   // side still sees it. Friendly robots are ignored. Returns { angle, dist } or null.
@@ -114,7 +127,8 @@
           const tip = radioEnemyTip(world);
           if (tip) m.goal = tip; // charge straight toward the reported position
         }
-        return { moveTo: m.goal, speed: 1.2, aim: seen ? seen.angle : null, fire: !!seen };
+        return { moveTo: m.goal, speed: 1.2, aim: seen ? seen.angle : null, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
       },
     },
 
@@ -135,7 +149,8 @@
           world.radio.send({ type: 'enemy', ...pointAt(me, scanAngle, hit.dist) });
           m.lastBroadcast = world.time;
         }
-        return { moveTo: { x: m.dir * edge, z: edge }, aim: scanAngle, fire: !!seen };
+        return { moveTo: { x: m.dir * edge, z: edge }, aim: scanAngle, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
       },
     },
 
@@ -158,7 +173,8 @@
           const tip = radioEnemyTip(world);
           if (tip) m.sweep = angleTo(me, tip) - 0.07; // start just before so next step lands on it
         }
-        return { moveTo: corners[m.corner], aim: seen ? seen.angle : null, fire: !!seen };
+        return { moveTo: corners[m.corner], aim: seen ? seen.angle : null, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
       },
     },
 
@@ -184,7 +200,8 @@
           m.lastSeen = world.time;
         }
         m.wasBlocked = me.blocked;
-        return { moveTo: m.goal, speed: 1.1, aim: seen ? seen.angle : null, fire: !!seen };
+        return { moveTo: m.goal, speed: 1.1, aim: seen ? seen.angle : null, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
       },
     },
 
@@ -220,7 +237,8 @@
         }
         m.wasBlocked = me.blocked;
         const shaky = Math.sin(world.time * 7) * 0.12;
-        return { moveTo: m.goal, aim: seen ? seen.angle + shaky : null, fire: !!seen };
+        return { moveTo: m.goal, aim: seen ? seen.angle + shaky : null, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
       },
     },
 
@@ -302,7 +320,8 @@
           aim = angleTo(me, target);
           fire = true;
         }
-        return { moveTo: corners[m.corner], aim, fire };
+        return { moveTo: corners[m.corner], aim, fire,
+                 ...(m.lock ? {} : howitzerAtTip(me, world)) };
       },
     },
   };
