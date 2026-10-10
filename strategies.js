@@ -244,43 +244,49 @@
 
     ingwa: {
       name: 'Ingwa',
-      description: 'Charges around like Rambo, but when it spots an enemy cornered against the arena edge it backs away and lobs a howitzer shell into the corner.',
+      description: 'Runs away from enemies like Scaredy, but when it spots one cornered against the arena edge it lobs a howitzer shell into the corner.',
       think(me, world) {
         const m = me.mem;
-        if (!m.goal || dist(me, m.goal) < 1 || (me.blocked && !m.wasBlocked)) m.goal = randomOpenPoint(world);
+        const seen = radarTrack(me, world, 0.35);
+        const hurt = m.lastHp !== undefined && me.hp < m.lastHp;
+        m.lastHp = me.hp;
+        broadcastEnemy(me, world, seen);
+        if (hurt && world.radio && world.time - (m.lastDistress ?? -99) > 2) {
+          world.radio.send({ type: 'enemy', ...pointAt(me, me.hitAngle, 6) });
+          m.lastDistress = world.time;
+        }
+        const tip = radioEnemyTip(world);
+        const danger = seen ? pointAt(me, seen.angle, seen.dist)
+                     : (me.robotHit || me.wallHit) ? pointAt(me, me.hitAngle, 3)
+                     : tip ?? null;
+        const needsNewGoal = (seen && seen.dist < 9) || hurt || (me.blocked && !m.wasBlocked)
+          || me.wallHit || me.robotHit || !m.goal || dist(me, m.goal) < 1
+          || (tip && world.time - (m.lastTipFlee ?? -99) > 3);
+        if (needsNewGoal) {
+          const flee = danger ?? me;
+          let best = -1;
+          for (let i = 0; i < 12; i++) {
+            const p = randomOpenPoint(world);
+            if (dist(p, flee) > best) { best = dist(p, flee); m.goal = p; }
+          }
+          if (tip) m.lastTipFlee = world.time;
+        }
         m.wasBlocked = me.blocked;
 
-        const seen = radarTrack(me, world);
-        broadcastEnemy(me, world, seen);
-
+        // Howitzer: if seen enemy is cornered, lob a shell in; otherwise fall back to radio tip.
+        let howitzerCmd = !seen ? howitzerAtTip(me, world) : {};
         if (seen) {
           const enemy = pointAt(me, seen.angle, seen.dist);
           const edgeThresh = world.arena * 0.65;
-          const cornered = Math.abs(enemy.x) > edgeThresh && Math.abs(enemy.z) > edgeThresh;
-
-          if (cornered && world.howitzer.ready && world.howitzer.canReach(enemy.x, enemy.z)) {
-            // Pick a goal far from the enemy corner so we're not against the wall when we fire.
-            if (!m.cornerGoal || world.time - (m.cornerGoalTime ?? 0) > 3) {
-              let best = randomOpenPoint(world);
-              for (let i = 0; i < 15; i++) {
-                const p = randomOpenPoint(world);
-                if (dist(p, enemy) > dist(best, enemy)) best = p;
-              }
-              m.cornerGoal = best;
-              m.cornerGoalTime = world.time;
-            }
-            m.goal = m.cornerGoal;
-            return { moveTo: m.goal, speed: 1.2, aim: seen.angle, fire: true,
-                     fireHowitzer: enemy };
+          if (Math.abs(enemy.x) > edgeThresh && Math.abs(enemy.z) > edgeThresh
+              && world.howitzer.ready && world.howitzer.canReach(enemy.x, enemy.z)) {
+            howitzerCmd = { fireHowitzer: enemy };
           }
         }
 
-        if (!seen) {
-          const tip = radioEnemyTip(world);
-          if (tip) m.goal = tip;
-        }
-        return { moveTo: m.goal, speed: 1.2, aim: seen ? seen.angle : null, fire: !!seen,
-                 ...(!seen ? howitzerAtTip(me, world) : {}) };
+        const shaky = Math.sin(world.time * 7) * 0.12;
+        return { moveTo: m.goal, aim: seen ? seen.angle + shaky : null, fire: !!seen,
+                 ...howitzerCmd };
       },
     },
 
