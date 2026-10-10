@@ -7,7 +7,9 @@
 //   gfx.drawRobot(robot, time);        // see ROBOT STATE below
 //   gfx.drawBullet(bullet);
 //   gfx.drawExplosion({ x, z, age, color, seed });  // done when age >= RobotGfx.EXPLOSION_TIME
-//   gfx.drawWalls([{ x0, z0, x1, z1 }, ...]);      // interior walls, axis-aligned boxes
+//   gfx.loadFacades([url, ...]);                   // 512x512 facade photos for textured walls
+//   gfx.drawWalls([{ x0, z0, x1, z1, h?, color?, facade?, hp?, maxHp? }, ...]); // interior walls, axis-aligned boxes;
+//                                                  // facade = { layer, tile, tint } picks a loaded photo
 //   gfx.drawRadar(robot);                          // the robot's last radar scan, if any (robot.scan)
 //   gfx.drawImpact({ x, y, z, age });               // bullet hitting a wall; done after IMPACT_TIME
 //   gfx.drawCrumble({ x0, z0, x1, z1, seed, age }); // a wall block falling apart; done after CRUMBLE_TIME
@@ -145,6 +147,20 @@
     return { data, idx };
   }
 
+  // Unit cube centred on the origin with sharp edges, so neighbouring blocks join without seams.
+  function box() {
+    const data = [], idx = [];
+    for (const [n, u, v] of [[[1, 0, 0], [0, 0, 1], [0, 1, 0]], [[-1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                             [[0, 1, 0], [1, 0, 0], [0, 0, 1]], [[0, -1, 0], [0, 0, 1], [1, 0, 0]],
+                             [[0, 0, 1], [0, 1, 0], [1, 0, 0]], [[0, 0, -1], [1, 0, 0], [0, 1, 0]]]) {
+      const base = data.length / 6;
+      for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]])
+        data.push(...[0, 1, 2].map((k) => (n[k] + u[k] * a + v[k] * b) / 2), ...n);
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return { data, idx };
+  }
+
   // Flat disc at y=0, radius 1 (used for blob shadows).
   function disc(seg = 32) {
     const data = [0, 0, 0, 0, 1, 0], idx = [];
@@ -170,18 +186,26 @@ void main() {
   gl_Position = uViewProj * w;
 }`;
 
-  // uMode: 0 = lit part, 1 = soft blob shadow, 2 = checkered floor
+  // uMode: 0 = lit part, 1 = soft blob shadow, 2 = checkered floor, 3 = glow, 4 = textured facade, 5 = puff
   const FS = `#version 300 es
 precision highp float;
+precision highp sampler2DArray;
 in vec3 vNor, vWorld, vLocal;
 uniform vec3 uColor, uEye;
-uniform float uEmissive, uFlash, uAlpha;
+uniform float uEmissive, uFlash, uAlpha, uLayer, uTile, uTop;
 uniform int uMode;
+uniform sampler2DArray uFacade;
 out vec4 outColor;
 void main() {
   if (uMode == 3) {
     // translucent glow (radar beam / ping) that fades away from the origin
     float a = uAlpha * (1.0 - 0.7 * smoothstep(0.0, 1.0, length(vLocal.xz)));
+    outColor = vec4(uColor, a);
+    return;
+  }
+  if (uMode == 5) {
+    // soft round puff (smoke, flame): fades toward the silhouette from any viewing angle
+    float a = uAlpha * pow(max(dot(normalize(vNor), normalize(uEye - vWorld)), 0.0), 2.0);
     outColor = vec4(uColor, a);
     return;
   }
@@ -199,6 +223,23 @@ void main() {
     vec2 cell = floor(vWorld.xz);
     base *= mix(1.0, 0.92, mod(cell.x + cell.y, 2.0));
     shiny = 0.0;
+  }
+  if (uMode == 4) {
+    // Facade photo on the walls, in world coordinates so it runs on across neighbouring blocks
+    // and every storey starts at the ground; uColor tints it (damage darkens). Flat roofs.
+    // Snap the normal to the main axis so the blocks' bevelled edges don't show as seams.
+    vec3 a = abs(N);
+    N = a.y > a.x && a.y > a.z ? vec3(0.0, sign(N.y), 0.0) : a.x > a.z ? vec3(sign(N.x), 0.0, 0.0) : vec3(0.0, 0.0, sign(N.z));
+    // Everything at the very top is roof, so the hairline gaps between neighbouring blocks'
+    // rounded edges show roof instead of the blocks' inner walls.
+    if (abs(N.y) < 0.5 && vWorld.y < uTop - 0.03) {
+      float u = abs(N.x) > abs(N.z) ? vWorld.z : vWorld.x;
+      base = texture(uFacade, vec3(vec2(u, -vWorld.y) / uTile, uLayer)).rgb * uColor * 1.4;
+    } else {
+      base = vec3(0.62, 0.62, 0.6) * uColor;
+      N = vec3(0.0, 1.0, 0.0);
+    }
+    shiny = 0.15;
   }
   // soft two-tone diffuse gives a friendly toy look
   float diff = smoothstep(-0.15, 0.55, dot(N, L));
@@ -282,12 +323,41 @@ void main() {
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     const u = {};
-    for (const n of ['uViewProj', 'uModel', 'uColor', 'uEye', 'uEmissive', 'uFlash', 'uAlpha', 'uMode'])
+    for (const n of ['uViewProj', 'uModel', 'uColor', 'uEye', 'uEmissive', 'uFlash', 'uAlpha', 'uMode', 'uLayer', 'uTile', 'uTop', 'uFacade'])
       u[n] = gl.getUniformLocation(prog, n);
+
+    // Facade photos live in one texture array, one layer each. Layers start mid-grey and fill
+    // in as the images arrive. All images must be FACADE_SIZE square.
+    const FACADE_SIZE = 512;
+    let facadeTex = null;
+    function loadFacades(urls) {
+      facadeTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
+      const levels = Math.log2(FACADE_SIZE) + 1;
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, levels, gl.RGBA8, FACADE_SIZE, FACADE_SIZE, urls.length);
+      const grey = new Uint8Array(FACADE_SIZE * FACADE_SIZE * 4).fill(150);
+      for (let i = 0; i < urls.length; i++)
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, FACADE_SIZE, FACADE_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, grey);
+      gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+      if (aniso) gl.texParameterf(gl.TEXTURE_2D_ARRAY, aniso.TEXTURE_MAX_ANISOTROPY_EXT, 8);
+      urls.forEach((url, i) => {
+        const img = new Image();
+        img.onload = () => {
+          gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, FACADE_SIZE, FACADE_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, img);
+          gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+        };
+        img.src = url;
+      });
+    }
 
     const M = {
       cube: upload(gl, roundedBox(1, 1, 1, 0.08, 2)),
       slab: upload(gl, roundedBox(1, 1, 1, 0.002, 1)),
+      box: upload(gl, box()),
       sphere: upload(gl, sphere()),
       cyl: upload(gl, cylinder()),
       disc: upload(gl, disc()),
@@ -315,12 +385,12 @@ void main() {
       gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
     }
 
-    function drawGlow(mesh, model, color, alpha) {
+    function drawGlow(mesh, model, color, alpha, mode = 3, additive = false) {
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.blendFunc(gl.SRC_ALPHA, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);
       gl.uniform1f(u.uAlpha, alpha);
-      draw(mesh, model, color, 0, 3);
+      draw(mesh, model, color, 0, mode);
       gl.depthMask(true);
       gl.disable(gl.BLEND);
     }
@@ -340,6 +410,9 @@ void main() {
       gl.enable(gl.DEPTH_TEST);
       gl.uniformMatrix4fv(u.uViewProj, false, viewProj);
       gl.uniform3fv(u.uEye, eye);
+      gl.uniform1i(u.uFacade, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
       eyePos = eye;
       flash = 0;
     }
@@ -487,11 +560,38 @@ void main() {
 
     function drawWalls(walls) {
       flash = 0;
+      // A building whose blocks are all there and unhurt is drawn as one box: cheaper, and no
+      // seams where its blocks meet.
+      const intact = new Map();
+      for (const w of walls)
+        if (w.building && w.hp === (w.maxHp || Infinity)) intact.set(w.building, (intact.get(w.building) ?? 0) + 1);
+      const drawn = new Set();
       for (const w of walls) {
+        const b = w.building;
+        if (b && intact.get(b) === b.blocks) {
+          if (drawn.has(b)) continue;
+          drawn.add(b);
+          gl.uniform1f(u.uLayer, w.facade.layer);
+          gl.uniform1f(u.uTile, w.facade.tile);
+          gl.uniform1f(u.uTop, w.h);
+          const t = w.facade.tint;
+          draw(M.box, chain(translate((b.x0 + b.x1) / 2, w.h / 2, (b.z0 + b.z1) / 2), scale(b.x1 - b.x0, w.h, b.z1 - b.z0)), [t, t, t], 0, 4);
+          continue;
+        }
         const cx = (w.x0 + w.x1) / 2, cz = (w.z0 + w.z1) / 2, sx = w.x1 - w.x0, sz = w.z1 - w.z0;
         // Damaged blocks sink and darken, so you can see which ones are about to go.
-        const f = w.maxHp ? w.hp / w.maxHp : 1, h = WALL_HEIGHT * (0.45 + 0.55 * f);
-        const col = INNER_WALL.map((v) => v * (0.7 + 0.3 * f));
+        const f = w.maxHp ? w.hp / w.maxHp : 1, h = (w.h ?? WALL_HEIGHT) * (0.45 + 0.55 * f);
+        if (w.facade && facadeTex) {
+          // w.facade = { layer, tile, tint }: which photo, how many world units one copy covers
+          const tint = w.facade.tint * (0.7 + 0.3 * f);
+          gl.uniform1f(u.uLayer, w.facade.layer);
+          gl.uniform1f(u.uTile, w.facade.tile);
+          gl.uniform1f(u.uTop, h);
+          // A hair oversized, so rounding can't open cracks between neighbouring blocks.
+          draw(M.box, chain(translate(cx, h / 2, cz), scale(sx + 0.01, h, sz + 0.01)), [tint, tint, tint], 0, 4);
+          continue;
+        }
+        const col = (w.color ?? INNER_WALL).map((v) => v * (0.7 + 0.3 * f));
         draw(M.slab, chain(translate(cx, h / 2, cz), scale(sx, h, sz)), col);
         draw(M.slab, chain(translate(cx, h, cz), scale(sx + 0.08, 0.08, sz + 0.08)), lighten(col, 0.35));
       }
@@ -519,9 +619,39 @@ void main() {
       draw(M.sphere, chain(translate(i.x, i.y, i.z), scale(0.08 + 0.25 * (1 - k))), FLASH, k);
     }
 
+    // A little missile pointing the way it flies, with a flickering flame and a smoke trail
+    // that never reaches back past the launch point (x0, z0).
     function drawBullet(b) {
-      drawShadow(b.x, b.z, 0.18, 0.3);
-      draw(M.sphere, chain(translate(b.x, b.y, b.z), scale(0.13)), BULLET);
+      const yaw = Math.atan2(b.vx, b.vz), dx = Math.sin(yaw), dz = Math.cos(yaw);
+      const at = (d, y = b.y) => translate(b.x + dx * d, y, b.z + dz * d);
+      const flown = b.x0 === undefined ? 3 : Math.hypot(b.x - b.x0, b.z - b.z0);
+      const t = b.life ?? 0, col = b.color ?? BULLET;
+      flash = 0;
+      drawShadow(b.x, b.z, 0.2, 0.3);
+
+      draw(M.cyl, chain(at(-0.05), rotY(yaw), rotX(Math.PI / 2), scale(0.075, 0.5, 0.075)), METAL);
+      draw(M.sphere, chain(at(0.2), rotY(yaw), scale(0.075, 0.075, 0.16)), col);
+      for (let k = 0; k < 4; k++) {
+        const a = (k * Math.PI) / 2 + Math.PI / 4;
+        draw(M.cube, chain(at(-0.24), rotY(yaw), rotZ(a), translate(0, 0.09, 0), scale(0.02, 0.12, 0.14)), col);
+      }
+
+      // smoke first (behind the flame): grey puffs that swell, rise a little and fade
+      for (let i = 8; i >= 0; i--) {
+        const d = 0.85 + i * 0.32;
+        if (d > flown) continue;
+        const k = i / 9, wob = Math.sin(t * 9 + i * 1.7) * 0.03;
+        drawGlow(M.sphere, chain(at(-d, b.y + k * 0.2 + wob), scale(0.12 + k * 0.22)), [0.42, 0.42, 0.45], 0.55 * (1 - k), 5);
+      }
+      // flame: a flickering orange-to-red plume around a white-hot core
+      const flick = (i) => 0.75 + 0.25 * Math.sin(t * 70 + i * 2.1);
+      const plume = [[1, 0.75, 0.15], [1, 0.5, 0.05], [0.95, 0.32, 0.03], [0.8, 0.2, 0.02]];
+      for (let i = 3; i >= 0; i--) {
+        const d = 0.38 + i * 0.13, r = (0.16 - i * 0.022) * flick(i + 1);
+        if (d > flown) continue;
+        drawGlow(M.sphere, chain(at(-d), rotY(yaw), scale(r, r, r * 1.4)), plume[i], 1 - i * 0.15, 5);
+      }
+      draw(M.sphere, chain(at(-0.33), rotY(yaw), scale(0.055 * flick(0), 0.055 * flick(0), 0.09)), [1, 0.95, 0.7], 1);
     }
 
     // Fireball plus flying scrap. e = { x, z, age, color, seed }; finished when age >= EXPLOSION_TIME.
@@ -565,10 +695,10 @@ void main() {
       const { age } = c, seed = c.seed ?? 0;
       const cx = (c.x0 + c.x1) / 2, cz = (c.z0 + c.z1) / 2, sx = c.x1 - c.x0, sz = c.z1 - c.z0;
       const shrink = Math.min(1, (CRUMBLE_TIME - age) / 0.5);
-      const h0 = WALL_HEIGHT * 0.45;
+      const h0 = (c.h ?? WALL_HEIGHT) * 0.45, base = c.color ?? INNER_WALL;
       flash = 0;
       const dust = Math.max(0, 1 - age / 0.6);
-      if (dust > 0) drawGlow(M.sphere, chain(translate(cx, h0 * 0.6, cz), scale((sx + sz) * 0.4 * (1 + age * 1.5))), lighten(INNER_WALL, 0.5), 0.45 * dust);
+      if (dust > 0) drawGlow(M.sphere, chain(translate(cx, h0 * 0.6, cz), scale((sx + sz) * 0.4 * (1 + age * 1.5))), lighten(base, 0.5), 0.45 * dust);
       for (let i = 0; i < 14; i++) {
         const r1 = Math.sin(seed * 13.1 + i * 7.3) * 0.5 + 0.5, r2 = Math.sin(seed * 5.7 + i * 3.1) * 0.5 + 0.5;
         const ox = (r1 - 0.5) * sx, oz = (r2 - 0.5) * sz, ys = (i % 3) / 3 * h0 + 0.15;
@@ -579,11 +709,11 @@ void main() {
         const tf = Math.min(t, 0.5);
         const m = chain(translate(cx + ox + vx * tf * 0.6, y, cz + oz + vz * tf * 0.6),
           rotX(settle * t * (4 + i) + i), rotZ(settle * t * (3 + i) + i * 0.5), scale(size * shrink));
-        draw(M.cube, m, INNER_WALL.map((v) => v * (0.65 + 0.1 * (i % 3))));
+        draw(M.cube, m, base.map((v) => v * (0.65 + 0.1 * (i % 3))));
       }
     }
 
-    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow };
+    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadFacades };
   }
 
   global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, WALL_HEIGHT };

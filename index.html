@@ -86,6 +86,7 @@
           <option value="fourRooms">Four Rooms</option>
           <option value="pillars">Pillars</option>
           <option value="maze">Maze</option>
+          <option value="downtown">Downtown</option>
         </select>
       </label>
       <label>Wall strength:
@@ -190,18 +191,67 @@ const WALL_HP_CHOICES = [1, 2, 4, 8, 0];
 const BLOCK_SIZE = 1;
 function buildWalls(layoutKey, arena, wallHp = 2) {
   const blocks = [];
-  for (const [fx0, fz0, fx1, fz1] of WALL_LAYOUTS[layoutKey] ?? []) {
-    const x0 = fx0 * arena, z0 = fz0 * arena, x1 = fx1 * arena, z1 = fz1 * arena;
+  const addBox = (x0, z0, x1, z1, extra) => {
     const nx = Math.max(1, Math.round((x1 - x0) / BLOCK_SIZE)), nz = Math.max(1, Math.round((z1 - z0) / BLOCK_SIZE));
+    if (extra?.building) Object.assign(extra.building, { x0, z0, x1, z1, blocks: nx * nz });
     for (let i = 0; i < nx; i++)
       for (let j = 0; j < nz; j++)
         blocks.push({
           x0: x0 + ((x1 - x0) * i) / nx, x1: x0 + ((x1 - x0) * (i + 1)) / nx,
           z0: z0 + ((z1 - z0) * j) / nz, z1: z0 + ((z1 - z0) * (j + 1)) / nz,
-          hp: wallHp || Infinity, maxHp: wallHp, seed: Math.random() * 10,
+          hp: wallHp || Infinity, maxHp: wallHp, seed: Math.random() * 10, ...extra,
         });
-  }
+  };
+  if (layoutKey === 'downtown') buildDowntown(arena, addBox);
+  else for (const [fx0, fz0, fx1, fz1] of WALL_LAYOUTS[layoutKey] ?? []) addBox(fx0 * arena, fz0 * arena, fx1 * arena, fz1 * arena);
   return blocks;
+}
+
+// A city centre: a grid of streets (including one all the way round the edge) with city blocks
+// between them. Each city block is split into a few buildings of different heights and kinds;
+// now and then a lot is left empty as a little square. Seeded by the arena size, so the city
+// in the setup preview is the one you fight in.
+// Each kind has a facade photo (textures/, CC0 from ambientCG); tile is how many world units
+// one copy of the photo covers, so that a storey is about 0.9 units on every kind. color is the
+// photo's average, used for falling debris.
+const BUILDING_KINDS = [
+  { tex: 'facade-brick.jpg',        tile: 5.4,  color: [0.43, 0.41, 0.41], minH: 1.6, maxH: 2.8 },
+  { tex: 'facade-concrete.jpg',     tile: 5.4,  color: [0.35, 0.36, 0.37], minH: 2.2, maxH: 4.2 },
+  { tex: 'facade-white-office.jpg', tile: 7.2,  color: [0.46, 0.5, 0.5],   minH: 1.8, maxH: 3.6 },
+  { tex: 'facade-glass.jpg',        tile: 9,    color: [0.27, 0.3, 0.33],  minH: 3.2, maxH: 5.5 },
+  { tex: 'facade-dark-office.jpg',  tile: 28.8, color: [0.37, 0.33, 0.31], minH: 2.6, maxH: 4.6 },
+];
+const STREET = 3.2;
+gfx.loadFacades(BUILDING_KINDS.map((k) => 'textures/' + k.tex));
+
+function buildDowntown(arena, addBox) {
+  let seed = 1013904223 + arena * 7919;
+  const rand = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const lo = -arena + STREET, inner = 2 * (arena - STREET);
+  const n = Math.max(1, Math.round((inner + STREET) / (5.5 + STREET)));
+  const size = (inner - (n - 1) * STREET) / n;
+  // Split a span into 1 or 2 lots, never thinner than 2.
+  const split = (a, b) => {
+    if (b - a < 4 || rand() < 0.25) return [[a, b]];
+    const m = a + (b - a) * (0.4 + rand() * 0.2);
+    return [[a, m], [m, b]];
+  };
+  for (let bi = 0; bi < n; bi++)
+    for (let bj = 0; bj < n; bj++) {
+      const x0 = lo + bi * (size + STREET), z0 = lo + bj * (size + STREET);
+      for (const [lx0, lx1] of split(x0, x0 + size))
+        for (const [lz0, lz1] of split(z0, z0 + size)) {
+          if (rand() < 0.12) continue; // empty lot
+          const k = Math.floor(rand() * BUILDING_KINDS.length), kind = BUILDING_KINDS[k];
+          const h = kind.minH + rand() * (kind.maxH - kind.minH);
+          const shade = 0.9 + rand() * 0.2;
+          addBox(lx0, lz0, lx1, lz1, {
+            h, color: kind.color.map((v) => Math.min(1, v * shade)),
+            facade: { layer: k, tile: kind.tile, tint: Math.min(1.1, 1.05 * shade) },
+            building: {}, // shared by all its blocks; lets the renderer draw it whole while undamaged
+          });
+        }
+    }
 }
 
 let ARENA = 14;
@@ -250,6 +300,7 @@ function newRound(cfg) {
   ARENA = cfg.arenaSize ?? 14;
   RADAR_RANGE = ARENA * 2 * Math.SQRT2;
   WALLS = buildWalls(cfg.layout ?? 'cross', ARENA, cfg.wallHp ?? 2);
+  wallsVersion++;
 
   if (cfg.teamsMode) {
     const flat = [];
@@ -291,6 +342,7 @@ function newRound(cfg) {
     });
   }
   bullets = []; explosions = []; impacts = []; crumbles = [];
+  for (const r of robots) Object.assign(r, nearestFreePoint(r)); // don't start inside a building
   mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
   battleTime = 0;
   msg.textContent = '';
@@ -314,6 +366,7 @@ function placeMines(count, damage) {
 function damageBlock(block, hits = 1) {
   if (block.hp === Infinity || (block.hp -= hits) > 0) return; // Infinity = indestructible
   WALLS.splice(WALLS.indexOf(block), 1);
+  wallsVersion++;
   crumbles.push({ ...block, age: 0 });
   playCrumble();
 }
@@ -334,6 +387,116 @@ function detonate(mine) {
   }
 }
 
+// ---------- navigation ----------
+// The floor is cut into a grid of small cells; a cell is free when a robot standing on it would
+// clear every wall. When a robot's goal is out of sight behind a building, the game finds a
+// route over free cells with A* and steers the robot along it, so every strategy can drive round
+// obstacles without knowing about them. Rebuilt whenever a wall block is destroyed.
+const NAV_CELL = 0.5, NAV_CLEAR = ROBOT_RADIUS + 0.25;
+let wallsVersion = 0, nav = null;
+
+function navGrid() {
+  if (nav && nav.version === wallsVersion && nav.arena === ARENA) return nav;
+  const n = Math.ceil((2 * ARENA) / NAV_CELL), free = new Uint8Array(n * n), lim = ARENA - 0.8;
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++) {
+      const x = -ARENA + (i + 0.5) * NAV_CELL, z = -ARENA + (j + 0.5) * NAV_CELL;
+      free[j * n + i] = Math.abs(x) <= lim && Math.abs(z) <= lim ? 1 : 0;
+    }
+  const cellIdx = (v) => Math.floor((v + ARENA) / NAV_CELL);
+  for (const w of WALLS)
+    for (let j = Math.max(0, cellIdx(w.z0 - NAV_CLEAR)); j <= Math.min(n - 1, cellIdx(w.z1 + NAV_CLEAR)); j++)
+      for (let i = Math.max(0, cellIdx(w.x0 - NAV_CLEAR)); i <= Math.min(n - 1, cellIdx(w.x1 + NAV_CLEAR)); i++) {
+        const x = -ARENA + (i + 0.5) * NAV_CELL, z = -ARENA + (j + 0.5) * NAV_CELL;
+        if (Math.hypot(x - clamp(x, w.x0, w.x1), z - clamp(z, w.z0, w.z1)) < NAV_CLEAR) free[j * n + i] = 0;
+      }
+  return (nav = { n, free, version: wallsVersion, arena: ARENA });
+}
+
+const navCell = (g, p) => [clamp(Math.floor((p.x + ARENA) / NAV_CELL), 0, g.n - 1), clamp(Math.floor((p.z + ARENA) / NAV_CELL), 0, g.n - 1)];
+const navPoint = (i, j) => ({ x: -ARENA + (i + 0.5) * NAV_CELL, z: -ARENA + (j + 0.5) * NAV_CELL });
+const navFree = (g, p) => { const [i, j] = navCell(g, p); return g.free[j * g.n + i] === 1; };
+
+// The free cell closest to p (searching outward ring by ring), as a point.
+function nearestFreePoint(p) {
+  const g = navGrid(), [ci, cj] = navCell(g, p);
+  if (g.free[cj * g.n + ci]) return { x: p.x, z: p.z };
+  for (let rad = 1; rad < g.n; rad++) {
+    let best = null, bestD = Infinity;
+    for (let j = cj - rad; j <= cj + rad; j++)
+      for (let i = ci - rad; i <= ci + rad; i++) {
+        if (i < 0 || j < 0 || i >= g.n || j >= g.n || Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== rad) continue;
+        if (!g.free[j * g.n + i]) continue;
+        const q = navPoint(i, j), d = Math.hypot(q.x - p.x, q.z - p.z);
+        if (d < bestD) { bestD = d; best = q; }
+      }
+    if (best) return best;
+  }
+  return { x: p.x, z: p.z };
+}
+
+// True when a robot could drive straight from a to b. The ends are allowed to be a little
+// inside the clearance margin, since robots often stand right next to a wall.
+function lineClear(a, b) {
+  const g = navGrid(), d = Math.hypot(b.x - a.x, b.z - a.z), steps = Math.ceil(d / (NAV_CELL / 2));
+  for (let k = 1; k < steps; k++) {
+    const t = k / steps, along = t * d;
+    if (along < 0.75 || d - along < 0.75) continue;
+    if (!navFree(g, { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t })) return false;
+  }
+  return true;
+}
+
+// A* over free cells, 8-connected without cutting corners. If the goal can't be reached, the
+// route leads to the reachable cell nearest to it. Returns a list of points, start excluded.
+function findPath(from, to) {
+  const g = navGrid(), n = g.n;
+  const s = nearestFreePoint(from), t = nearestFreePoint(to);
+  const [si, sj] = navCell(g, s), [ti, tj] = navCell(g, t);
+  const start = sj * n + si, goal = tj * n + ti;
+  const h = (k) => { const dx = Math.abs((k % n) - ti), dz = Math.abs(((k / n) | 0) - tj); return Math.max(dx, dz) + 0.414 * Math.min(dx, dz); };
+  const cost = new Float32Array(n * n).fill(Infinity), came = new Int32Array(n * n).fill(-1);
+  const heap = [[h(start), start]];
+  const push = (e) => { heap.push(e); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  cost[start] = 0;
+  let best = start;
+  while (heap.length) {
+    const [, k] = pop();
+    if (k === goal) { best = k; break; }
+    if (h(k) < h(best)) best = k;
+    const i = k % n, j = (k / n) | 0;
+    for (let dj = -1; dj <= 1; dj++)
+      for (let di = -1; di <= 1; di++) {
+        if (!di && !dj) continue;
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= n || nj >= n || !g.free[nj * n + ni]) continue;
+        if (di && dj && (!g.free[j * n + ni] || !g.free[nj * n + i])) continue;
+        const nk = nj * n + ni, c = cost[k] + (di && dj ? 1.414 : 1);
+        if (c < cost[nk]) { cost[nk] = c; came[nk] = k; push([c + h(nk), nk]); }
+      }
+  }
+  const path = [];
+  for (let k = best; k !== start && k !== -1; k = came[k]) path.push(navPoint(k % n, (k / n) | 0));
+  return path.reverse();
+}
+
+// Where the robot should actually drive this frame to get to goal: straight at it when the way
+// is clear, otherwise to the farthest point of its route that it can see.
+function steer(r, goal) {
+  if (!goal || lineClear(r, goal)) { r.nav = null; return goal; }
+  let nv = r.nav;
+  if (!nv || nv.version !== wallsVersion || Math.hypot(nv.gx - goal.x, nv.gz - goal.z) > 1 ||
+      battleTime - nv.t > 2 || (r.blocked && battleTime - nv.t > 0.5)) {
+    nv = r.nav = { gx: goal.x, gz: goal.z, version: wallsVersion, t: battleTime, path: findPath(r, goal) };
+  }
+  const p = nv.path;
+  while (p.length > 1 && Math.hypot(p[0].x - r.x, p[0].z - r.z) < 0.6) p.shift();
+  if (!p.length) return goal;
+  for (let i = Math.min(p.length - 1, 24); i > 0; i--) if (lineClear(r, p[i])) return p[i];
+  return p[0];
+}
+
 const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 const turnToward = (cur, target, step) => cur + Math.max(-step, Math.min(step, angDiff(cur, target)));
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -349,7 +512,7 @@ function fire(r) {
   const ax = r.x + s * aimDist, az = r.z + c * aimDist;
   const ddx = ax - bx, ddz = az - bz, dd = Math.hypot(ddx, ddz);
   bullets.push({
-    x: bx, y: 1.4, z: bz,
+    x: bx, y: 1.4, z: bz, x0: bx, z0: bz,
     vx: (ddx / dd) * BULLET_SPEED, vz: (ddz / dd) * BULLET_SPEED, owner: r, color: r.color, life: 2.5,
   });
 }
@@ -469,7 +632,7 @@ function update(dt) {
       continue;
     }
     const cmd = phase === 'battle' ? think(r) : {};
-    drive(r, cmd.moveTo, cmd.speed ?? 1, dt);
+    drive(r, steer(r, cmd.moveTo), cmd.speed ?? 1, dt);
     if (typeof cmd.aim === 'number') {
       r.turret = turnToward(r.turret, cmd.aim, 3 * dt);
       if (cmd.fire && r.cooldown <= 0 && Math.abs(angDiff(r.turret, cmd.aim)) < 0.08) fire(r);
@@ -536,7 +699,7 @@ function update(dt) {
       if (r.teamId === b.owner.teamId) continue;
       if (Math.hypot(r.x - b.x, r.z - b.z) < 0.7) {
         r.hit = 1;
-        playKlank();
+        playMissileHit();
         r.hp -= 1;
         if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
         r.x += b.vx * 0.02; r.z += b.vz * 0.02;
@@ -748,6 +911,9 @@ document.getElementById('shuffle').addEventListener('click', () => {
 document.getElementById('fight').addEventListener('click', () => {
   try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {}
   newRound();
+  autoCam.target = null;
+  autoCam.savedDist = dist;
+  for (const c of autoCam.candidates) c.score = 0;
   setup.hidden = true;
   phase = 'battle';
   cancelAnimationFrame(rafId);
@@ -857,12 +1023,99 @@ canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clie
 canvas.addEventListener('pointerup', () => { drag = null; });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
+  autoCam.holdUntil = performance.now() + 6000;
   yaw -= (e.clientX - drag.x) * 0.008;
   pitch = Math.max(0.3, Math.min(1.45, pitch + (e.clientY - drag.y) * 0.005));
   drag = { x: e.clientX, y: e.clientY };
 });
+// ---------- auto camera ----------
+// Walls and buildings hide robots, so during a battle the camera slowly swings round to where
+// it can see the most of them, and pans and zooms so the robots still fighting fill the view. A few candidate views are scored each
+// frame by tracing lines from the eye to every robot's body and head past the buildings; the
+// camera eases toward the best one. Dragging the view takes over for a few seconds.
+const autoCam = { holdUntil: 0, next: 0, target: null, candidates: [] };
+for (const p of [0.85, 1.05, 1.25])
+  for (let k = 0; k < 24; k++) autoCam.candidates.push({ yaw: (k / 24) * Math.PI * 2, pitch: p, score: 0 });
+
+const camCenter = { x: 0, z: 0 };
+let camAspect = 1.6;
+const camEye = (y, p, d = dist) => [camCenter.x + Math.sin(y) * Math.cos(p) * d, Math.sin(p) * d, camCenter.z + Math.cos(y) * Math.cos(p) * d];
+const camTarget = () => [camCenter.x, 0.4, camCenter.z];
+const CAM_FOV = (35 * Math.PI) / 180;
+
+// The closest camera distance (for this yaw and pitch) at which every point still lands inside
+// the middle of the picture, leaving a margin for the scoreboard and the robots' signs.
+function fitDist(points) {
+  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 200);
+  const fits = (d) => {
+    const m = mat4.mul(proj, mat4.lookAt(camEye(yaw, pitch, d), camTarget(), [0, 1, 0]));
+    return points.every(([x, y, z]) => {
+      const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+      const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      return w > 0.5 && Math.abs(cx / w) < 0.88 && Math.abs(cy / w) < 0.85;
+    });
+  };
+  let lo = 10, hi = 60;
+  if (fits(lo)) return lo;
+  for (let i = 0; i < 18; i++) { const mid = (lo + hi) / 2; if (fits(mid)) hi = mid; else lo = mid; }
+  return hi;
+}
+
+// Does the segment from a to b pass through the building block w (as it stands now)?
+function segHitsBlock(a, b, w) {
+  const f = w.maxHp ? w.hp / w.maxHp : 1, top = (w.h ?? RobotGfx.WALL_HEIGHT) * (0.45 + 0.55 * f);
+  let t0 = 0, t1 = 0.97;
+  for (const [o, d, lo, hi] of [[a[0], b[0] - a[0], w.x0, w.x1], [a[1], b[1] - a[1], 0, top], [a[2], b[2] - a[2], w.z0, w.z1]]) {
+    if (Math.abs(d) < 1e-9) { if (o < lo || o > hi) return false; continue; }
+    let u = (lo - o) / d, v = (hi - o) / d;
+    if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+function scoreView(c) {
+  const eye = camEye(c.yaw, c.pitch);
+  let seen = 0;
+  for (const r of robots) {
+    if (r.dying !== null) continue;
+    for (const y of [0.7, 1.6]) {
+      const p = [r.x, y, r.z];
+      const x0 = Math.min(eye[0], p[0]), x1 = Math.max(eye[0], p[0]), z0 = Math.min(eye[2], p[2]), z1 = Math.max(eye[2], p[2]);
+      if (!WALLS.some((w) => w.x1 > x0 && w.x0 < x1 && w.z1 > z0 && w.z0 < z1 && segHitsBlock(eye, p, w))) seen += 0.5;
+    }
+  }
+  return seen;
+}
+
+function updateAutoCam(dt) {
+  if (phase !== 'battle' || drag || performance.now() < autoCam.holdUntil) return;
+  const cs = autoCam.candidates;
+  for (let k = 0; k < 8; k++) { const c = cs[autoCam.next]; c.score = scoreView(c); autoCam.next = (autoCam.next + 1) % cs.length; }
+  // Prefer low views and little turning; only switch target for a clearly better view.
+  const value = (c) => c.score - (c.pitch - 0.85) * 0.8 - Math.abs(angDiff(yaw, c.yaw)) * 0.12;
+  const best = cs.reduce((a, b) => (value(b) > value(a) ? b : a));
+  if (!autoCam.target || value(best) > value(autoCam.target) + 0.5) autoCam.target = best;
+  const t = autoCam.target, ease = Math.min(1, dt * 0.6);
+  yaw += clamp(angDiff(yaw, t.yaw) * ease, -0.4 * dt, 0.4 * dt);
+  pitch += clamp((t.pitch - pitch) * ease, -0.2 * dt, 0.2 * dt);
+
+  // Pan to the middle of the robots still fighting, then zoom so they all fit.
+  const alive = robots.filter((r) => r.dying === null);
+  if (!alive.length) return;
+  const xs = alive.map((r) => r.x), zs = alive.map((r) => r.z);
+  const mx = (Math.min(...xs) + Math.max(...xs)) / 2, mz = (Math.min(...zs) + Math.max(...zs)) / 2;
+  const pan = Math.min(1, dt * 0.8);
+  camCenter.x += clamp((mx - camCenter.x) * pan, -6 * dt, 6 * dt);
+  camCenter.z += clamp((mz - camCenter.z) * pan, -6 * dt, 6 * dt);
+  const want = fitDist(alive.flatMap((r) => [[r.x, 0, r.z], [r.x, 2.6, r.z]]));
+  dist += clamp((want - dist) * Math.min(1, dt * 0.7), -8 * dt, 8 * dt);
+}
+
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
+  autoCam.holdUntil = performance.now() + 6000;
   dist = Math.max(6, Math.min(60, dist * (1 + e.deltaY * 0.001)));
 }, { passive: false });
 addEventListener('keydown', (e) => {
@@ -877,7 +1130,7 @@ let audio = null, noise = null, muted = false;
 function unlockAudio() {
   if (!audio) {
     audio = new AudioContext();
-    noise = audio.createBuffer(1, audio.sampleRate * 0.1, audio.sampleRate);
+    noise = audio.createBuffer(1, audio.sampleRate * 1.5, audio.sampleRate);
     const d = noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
@@ -919,31 +1172,60 @@ function playCrumble() {
   }
 }
 
-function playKlank() {
-  if (!audio || muted || audio.state !== 'running') return;
-  const now = audio.currentTime, pitch = 0.85 + Math.random() * 0.3;
-  const out = audio.createGain();
-  out.gain.value = 0.2;
-  out.connect(audio.destination);
-  for (const [freq, amp, decay] of [[410, 1, 0.35], [1090, 0.6, 0.25], [1730, 0.45, 0.18], [2650, 0.3, 0.12]]) {
-    const osc = audio.createOscillator(), g = audio.createGain();
-    osc.type = 'triangle';
-    osc.frequency.value = freq * pitch;
-    g.gain.setValueAtTime(amp, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
-    osc.connect(g).connect(out);
-    osc.start(now);
-    osc.stop(now + decay);
+// A missile hitting a robot: a sharp crack, a low thump that drops in pitch, a rumbling tail
+// that darkens as it dies away, and a faint ring from the armour. Built on any audio context
+// so it can also be rendered offline.
+function missileHitSound(ctx, dest, noiseBuf, t0) {
+  const v = 0.85 + Math.random() * 0.3; // a little different every time
+  const out = ctx.createGain();
+  out.gain.value = 0.3;
+  out.connect(dest);
+  const noiseThrough = (filters, gain, decay, offset = Math.random()) => {
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = noiseBuf;
+    let node = src;
+    for (const f of filters) node = node.connect(f);
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + decay);
+    node.connect(g).connect(out);
+    src.start(t0, offset * 0.3);
+    src.stop(t0 + decay + 0.05);
+  };
+  const filter = (type, freq, q = 0.7) => { const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; return f; };
+
+  // crack
+  noiseThrough([filter('highpass', 1800 * v)], 0.9, 0.07);
+  // body and rumble: low-passed noise whose cutoff falls as it fades
+  const sweep = filter('lowpass', 2500 * v);
+  sweep.frequency.setValueAtTime(2500 * v, t0);
+  sweep.frequency.exponentialRampToValueAtTime(180, t0 + 0.6);
+  noiseThrough([sweep], 1.0, 0.75);
+  // thump
+  const osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(95 * v, t0);
+  osc.frequency.exponentialRampToValueAtTime(32, t0 + 0.3);
+  g.gain.setValueAtTime(0.9, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.4);
+  osc.connect(g).connect(out);
+  osc.start(t0);
+  osc.stop(t0 + 0.45);
+  // armour ring, quiet
+  for (const [freq, amp, decay] of [[540, 0.07, 0.3], [1370, 0.04, 0.2]]) {
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq * v;
+    og.gain.setValueAtTime(amp, t0);
+    og.gain.exponentialRampToValueAtTime(0.001, t0 + decay);
+    o.connect(og).connect(out);
+    o.start(t0);
+    o.stop(t0 + decay);
   }
-  const strike = audio.createBufferSource(), band = audio.createBiquadFilter(), g = audio.createGain();
-  strike.buffer = noise;
-  band.type = 'bandpass';
-  band.frequency.value = 3000;
-  band.Q.value = 1.5;
-  g.gain.setValueAtTime(0.8, now);
-  g.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-  strike.connect(band).connect(g).connect(out);
-  strike.start(now);
+}
+
+function playMissileHit() {
+  if (!audio || muted || audio.state !== 'running') return;
+  missileHitSound(audio, audio.destination, noise, audio.currentTime);
 }
 
 function resize() {
@@ -962,7 +1244,7 @@ function frame(now) {
   rafId = 0;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (!paused && phase !== 'setup') { update(dt); simTime += dt; }
+  if (!paused && phase !== 'setup') { update(dt); simTime += dt; updateAutoCam(dt); }
 
   resize();
   const dpr = canvas.width / canvas.clientWidth;
@@ -973,9 +1255,14 @@ function frame(now) {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.viewport(0, 0, mainW, canvas.height);
 
-  const eye = [Math.sin(yaw) * Math.cos(pitch) * dist, Math.sin(pitch) * dist, Math.cos(yaw) * Math.cos(pitch) * dist];
-  const view = mat4.lookAt(eye, [0, 0.4, 0], [0, 1, 0]);
-  const proj = mat4.perspective((35 * Math.PI) / 180, mainW / canvas.height, 0.5, 200);
+  if (phase === 'setup') { // the preview shows the whole arena, at the zoom from before the battle
+    camCenter.x = 0; camCenter.z = 0;
+    if (autoCam.savedDist != null) { dist = autoCam.savedDist; autoCam.savedDist = null; }
+  }
+  camAspect = mainW / canvas.height;
+  const eye = camEye(yaw, pitch);
+  const view = mat4.lookAt(eye, camTarget(), [0, 1, 0]);
+  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 200);
   gfx.begin(mat4.mul(proj, view), eye);
   gfx.drawArena(ARENA);
   gfx.drawWalls(WALLS);

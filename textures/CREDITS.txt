@@ -1,0 +1,8 @@
+Facade textures from ambientCG (https://ambientcg.com), licensed CC0 1.0 Universal.
+Colour maps only, resized to 512x512.
+
+facade-brick.jpg         Facade018A
+facade-concrete.jpg      Facade019A
+facade-white-office.jpg  Facade006
+facade-glass.jpg         Facade001
+facade-dark-office.jpg   Facade012
