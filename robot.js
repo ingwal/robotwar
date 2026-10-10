@@ -187,7 +187,7 @@ void main() {
 }`;
 
   // uMode: 0 = lit part, 1 = soft blob shadow, 2 = checkered floor, 3 = glow, 4 = textured facade, 5 = puff,
-  // 6 = textured ground
+  // 6 = textured ground, 7 = radio-wave ring (transparent centre, bright ring near outer edge)
   const FS = `#version 300 es
 precision highp float;
 precision highp sampler2DArray;
@@ -201,6 +201,13 @@ void main() {
   if (uMode == 3) {
     // translucent glow (radar beam / ping) that fades away from the origin
     float a = uAlpha * (1.0 - 0.7 * smoothstep(0.0, 1.0, length(vLocal.xz)));
+    outColor = vec4(uColor, a);
+    return;
+  }
+  if (uMode == 7) {
+    // radio-wave ring: transparent at centre, bright near outer edge, sharp fade at rim
+    float r = length(vLocal.xz);
+    float a = uAlpha * smoothstep(0.55, 0.8, r) * (1.0 - smoothstep(0.88, 1.0, r));
     outColor = vec4(uColor, a);
     return;
   }
@@ -728,8 +735,8 @@ void main() {
       const k = p.age / RADIO_PULSE_TIME;
       if (k >= 1) return;
       flash = 0;
-      const r = 0.5 + k * 9.5;
-      drawGlow(M.disc, chain(translate(p.x, 0.05, p.z), scale(r, 1, r)), p.color, (1 - k) * 0.5, 3, true);
+      const r = 2 + k * 10;
+      drawGlow(M.disc, chain(translate(p.x, 0.05, p.z), scale(r, 1, r)), p.color, (1 - k) * 0.82, 7);
     }
 
     return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadTextures, drawRadioPulse };
