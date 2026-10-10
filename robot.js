@@ -320,6 +320,7 @@ void main() {
 
   const EXPLOSION_TIME = 1.3;
   const CRUMBLE_TIME = 3;
+  const RADIO_PULSE_TIME = 1.0;
 
   function create(gl) {
     const prog = gl.createProgram();
@@ -723,8 +724,16 @@ void main() {
       }
     }
 
-    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadTextures };
+    function drawRadioPulse(p) {
+      const k = p.age / RADIO_PULSE_TIME;
+      if (k >= 1) return;
+      flash = 0;
+      const r = 0.5 + k * 9.5;
+      drawGlow(M.disc, chain(translate(p.x, 0.05, p.z), scale(r, 1, r)), p.color, (1 - k) * 0.5, 3, true);
+    }
+
+    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadTextures, drawRadioPulse };
   }
 
-  global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, WALL_HEIGHT };
+  global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, RADIO_PULSE_TIME, WALL_HEIGHT };
 })(window);

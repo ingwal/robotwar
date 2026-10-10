@@ -10,6 +10,7 @@
 //   think(me, world, dt) -> { moveTo, speed, aim, fire }
 //
 //   me       the robot: x, z, heading, turret, speed, hp, maxHp,
+//            x, z       own position (GPS — always available)
 //            blocked    true when stuck against something for >0.5 s (long-term)
 //            wallHit    true when physically touching a wall or arena edge this frame
 //            robotHit   true when physically touching another robot this frame
@@ -17,7 +18,7 @@
 //                       call world.scan(me.hitAngle, 0.3) to see if it's a robot,
 //                       or world.wallDist(me.hitAngle) to see if it's a wall
 //            mem        an empty object the strategy can use to remember things between frames
-//   world    { arena, walls, time, bulletSpeed, radarRange, scan(angle, width), wallDist(angle) }
+//   world    { arena, walls, time, bulletSpeed, radarRange, scan, wallDist, radio }
 //              arena      half-size of the arena; the floor spans -arena..arena on x and z
 //              walls      interior walls as boxes { x0, z0, x1, z1 }
 //              scan       angle is a world angle; width is the beam's full width in radians
@@ -25,6 +26,11 @@
 //                         returns { dist, friendly } or null; friendly = same team as you
 //              wallDist   returns distance to the nearest wall or arena edge in direction angle;
 //                         unlike scan, this can be called any number of times per frame
+//              radio      team radio, or null if disabled:
+//                           radio.inbox  messages from teammates since last tick: [{ type, ...data }]
+//                           radio.send({ type, ...data })  broadcast to all living teammates
+//                         message type used by built-in strategies:
+//                           { type: 'enemy', x, z }  enemy spotted at world position x, z
 //   moveTo   {x, z} to drive to, or null to stand still
 //   speed    0..1.3, fraction of normal top speed (default 1)
 //   aim      world angle for the turret, or null to leave it where it is
@@ -51,6 +57,27 @@
         z: (Math.random() * 2 - 1) * (world.arena - margin),
       };
       if (!insideWall(p, world.walls, 1.2)) return p;
+    }
+  }
+
+  // Normalize an angle to [-PI, PI].
+  const normAngle = (a) => ((a % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+
+  // Return the most recent enemy-position tip from the radio inbox, or null.
+  function radioEnemyTip(world) {
+    if (!world.radio) return null;
+    for (let i = world.radio.inbox.length - 1; i >= 0; i--)
+      if (world.radio.inbox[i].type === 'enemy') return world.radio.inbox[i];
+    return null;
+  }
+
+  // Broadcast the seen target's world position if radio is on and enough time has passed.
+  // seen must be { angle, dist } as returned by radarTrack.
+  function broadcastEnemy(me, world, seen) {
+    if (!seen || !world.radio) return;
+    if (world.time - (me.mem.lastBroadcast ?? -99) > 1.5) {
+      world.radio.send({ type: 'enemy', ...pointAt(me, seen.angle, seen.dist) });
+      me.mem.lastBroadcast = world.time;
     }
   }
 
@@ -82,6 +109,11 @@
         if (!m.goal || dist(me, m.goal) < 1 || (me.blocked && !m.wasBlocked)) m.goal = randomOpenPoint(world);
         m.wasBlocked = me.blocked;
         const seen = radarTrack(me, world);
+        broadcastEnemy(me, world, seen);
+        if (!seen) {
+          const tip = radioEnemyTip(world);
+          if (tip) m.goal = tip; // charge straight toward the reported position
+        }
         return { moveTo: m.goal, speed: 1.2, aim: seen ? seen.angle : null, fire: !!seen };
       },
     },
@@ -94,10 +126,16 @@
         m.dir ??= me.x < 0 ? 1 : -1;
         if ((m.dir > 0 && me.x > edge - 0.5) || (m.dir < 0 && me.x < -edge + 0.5) || (me.blocked && !m.wasBlocked)) m.dir = -m.dir;
         m.wasBlocked = me.blocked;
-        const up = Math.PI;
-        const hit = world.scan(up, 0.2);
+        // Swing radar toward a radio tip when idle; fall back to default straight-up sweep.
+        const tip = radioEnemyTip(world);
+        const scanAngle = tip ? angleTo(me, tip) : Math.PI;
+        const hit = world.scan(scanAngle, tip ? 0.17 : 0.2);
         const seen = hit && !hit.friendly;
-        return { moveTo: { x: m.dir * edge, z: edge }, aim: up, fire: !!seen };
+        if (seen && world.radio && world.time - (m.lastBroadcast ?? -99) > 1.5) {
+          world.radio.send({ type: 'enemy', ...pointAt(me, scanAngle, hit.dist) });
+          m.lastBroadcast = world.time;
+        }
+        return { moveTo: { x: m.dir * edge, z: edge }, aim: scanAngle, fire: !!seen };
       },
     },
 
@@ -114,6 +152,12 @@
         m.lastHp = me.hp;
         if (m.hitsHere >= 2) { m.corner = (m.corner + 1) % 4; m.hitsHere = 0; }
         const seen = radarTrack(me, world, 0.07);
+        broadcastEnemy(me, world, seen);
+        if (!seen) {
+          // Jump the sweep to face a radio-tipped enemy rather than continuing the blind sweep.
+          const tip = radioEnemyTip(world);
+          if (tip) m.sweep = angleTo(me, tip) - 0.07; // start just before so next step lands on it
+        }
         return { moveTo: corners[m.corner], aim: seen ? seen.angle : null, fire: !!seen };
       },
     },
@@ -124,6 +168,7 @@
       think(me, world) {
         const m = me.mem;
         const seen = radarTrack(me, world);
+        broadcastEnemy(me, world, seen);
         if (seen && !me.blocked) {
           const prey = pointAt(me, seen.angle, seen.dist);
           const around = angleTo(prey, me) + 0.5;
@@ -133,7 +178,9 @@
           m.goal = (inArena && !insideWall(candidate, world.walls, 1.2)) ? candidate : randomOpenPoint(world);
           m.lastSeen = world.time;
         } else if (!m.goal || dist(me, m.goal) < 1 || (me.blocked && !m.wasBlocked) || world.time - (m.lastSeen ?? 0) > 3) {
-          m.goal = randomOpenPoint(world);
+          // Hunt toward a radio tip if available, otherwise roam.
+          const tip = radioEnemyTip(world);
+          m.goal = tip ?? randomOpenPoint(world);
           m.lastSeen = world.time;
         }
         m.wasBlocked = me.blocked;
@@ -149,14 +196,27 @@
         const seen = radarTrack(me, world, 0.35);
         const hurt = m.lastHp !== undefined && me.hp < m.lastHp;
         m.lastHp = me.hp;
-        if ((seen && seen.dist < 9) || hurt || (me.blocked && !m.wasBlocked) || me.wallHit || me.robotHit || !m.goal || dist(me, m.goal) < 1) {
-          const danger = seen ? pointAt(me, seen.angle, seen.dist)
-                       : (me.robotHit || me.wallHit) ? pointAt(me, me.hitAngle, 3) : me;
+        broadcastEnemy(me, world, seen);
+        // When taking damage, broadcast the estimated attacker position as an enemy tip.
+        if (hurt && world.radio && world.time - (m.lastDistress ?? -99) > 2) {
+          world.radio.send({ type: 'enemy', ...pointAt(me, me.hitAngle, 6) });
+          m.lastDistress = world.time;
+        }
+        const tip = radioEnemyTip(world);
+        const danger = seen ? pointAt(me, seen.angle, seen.dist)
+                     : (me.robotHit || me.wallHit) ? pointAt(me, me.hitAngle, 3)
+                     : tip ?? null;
+        const needsNewGoal = (seen && seen.dist < 9) || hurt || (me.blocked && !m.wasBlocked)
+          || me.wallHit || me.robotHit || !m.goal || dist(me, m.goal) < 1
+          || (tip && world.time - (m.lastTipFlee ?? -99) > 3);
+        if (needsNewGoal) {
+          const flee = danger ?? me;
           let best = -1;
           for (let i = 0; i < 12; i++) {
             const p = randomOpenPoint(world);
-            if (dist(p, danger) > best) { best = dist(p, danger); m.goal = p; }
+            if (dist(p, flee) > best) { best = dist(p, flee); m.goal = p; }
           }
+          if (tip) m.lastTipFlee = world.time;
         }
         m.wasBlocked = me.blocked;
         const shaky = Math.sin(world.time * 7) * 0.12;
@@ -197,6 +257,12 @@
           if (hit && !hit.friendly) { m.lock.angle += off / 2; m.lock.dist = hit.dist; m.misses = 0; }
           else { hit = null; if (++m.misses > 10) m.lock = null; }
         } else {
+          // When sweeping with no lock, jump the sweep toward a radio-tipped enemy position.
+          const tip = radioEnemyTip(world);
+          if (tip) {
+            const tipOff = normAngle(angleTo(me, tip) - facing) / (Math.PI / 4);
+            m.sweep = Math.max(-1, Math.min(1, tipOff)) - 0.16;
+          }
           m.sweep = ((m.sweep ?? -1) + 0.16 > 1 ? -1 : (m.sweep ?? -1) + 0.16);
           const a = facing + m.sweep * Math.PI / 4;
           hit = world.scan(a, 0.17);
@@ -209,6 +275,11 @@
         if (hit) {
           m.fixes = (m.fixes ?? []).filter((f) => world.time - f.t < 0.8);
           m.fixes.push({ ...pointAt(me, m.lock.angle, m.lock.dist), t: world.time });
+        }
+        // Broadcast enemy position while locked.
+        if (m.lock && world.radio && world.time - (m.lastBroadcast ?? -99) > 1.5) {
+          world.radio.send({ type: 'enemy', ...pointAt(me, m.lock.angle, m.lock.dist) });
+          m.lastBroadcast = world.time;
         }
         let aim = null, fire = false;
         const fixes = m.fixes ?? [];

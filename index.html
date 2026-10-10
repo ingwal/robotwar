@@ -23,7 +23,7 @@
   .config-row label { display: flex; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
   .config-row input[type=range] { accent-color: #2a3347; width: 110px; }
   .config-row select { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 6px; border: 1px solid #b8c2d4; background: #fff; }
-  .mode-row { margin-bottom: 12px; font-size: 13px; }
+  .mode-row { display: flex; gap: 20px; margin-bottom: 12px; font-size: 13px; }
   .count-row { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin-bottom: 10px; font-size: 13px; }
   .count-row label { display: flex; align-items: center; gap: 8px; }
   .count-row input[type=number] { width: 50px; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid #b8c2d4; }
@@ -112,6 +112,7 @@
   </div>
   <div class="mode-row">
     <label><input type="checkbox" id="teamsMode"> Teams mode</label>
+    <label><input type="checkbox" id="radioEnabled" checked> Radio</label>
   </div>
   <div id="noTeamsSection">
     <div class="count-row">
@@ -326,7 +327,7 @@ const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
   arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2, ground: 'checker',
-  teamsMode: false,
+  teamsMode: false, radioEnabled: true,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
   teamCount: 2, robotsPerTeam: 2,
@@ -343,6 +344,7 @@ try {
     if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
     if (saved.ground in GROUND_KINDS) config.ground = saved.ground;
     if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
+    if (typeof saved.radioEnabled === 'boolean') config.radioEnabled = saved.radioEnabled;
     if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
     if (Array.isArray(saved.strategies))
       config.strategies = saved.strategies.slice(0, 8).map((k) => (k in Strategies ? k : STRATEGY_KEYS[0]));
@@ -356,7 +358,8 @@ try {
 } catch {}
 
 let phase = 'setup';
-let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], roundOverTimer = 0, battleTime = 0;
+let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], radioPulses = [], roundOverTimer = 0, battleTime = 0;
+const teamRadio = new Map();
 const msg = document.getElementById('msg');
 
 function newRound(cfg) {
@@ -406,7 +409,9 @@ function newRound(cfg) {
       };
     });
   }
-  bullets = []; explosions = []; impacts = []; crumbles = [];
+  bullets = []; explosions = []; impacts = []; crumbles = []; radioPulses = [];
+  teamRadio.clear();
+  for (const r of robots) r.radioInbox = [];
   for (const r of robots) Object.assign(r, nearestFreePoint(r)); // don't start inside a building
   mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
   battleTime = 0;
@@ -663,12 +668,32 @@ function scan(r, angle, width) {
   return found;
 }
 
+function deliverRadio() {
+  for (const r of robots) {
+    const msgs = teamRadio.get(r.teamId) ?? [];
+    r.radioInbox = msgs.filter((m) => m._from !== r.robotIndex);
+  }
+  teamRadio.clear();
+}
+
 function think(r) {
   let scanned = false;
+  const radio = config.radioEnabled ? {
+    inbox: r.radioInbox ?? [],
+    send(msg) {
+      if (!teamRadio.has(r.teamId)) teamRadio.set(r.teamId, []);
+      teamRadio.get(r.teamId).push({ ...msg, _from: r.robotIndex });
+      if (battleTime - (r._lastPulse ?? -1) > 0.4) {
+        radioPulses.push({ x: r.x, z: r.z, color: r.color, age: 0 });
+        r._lastPulse = battleTime;
+      }
+    },
+  } : null;
   const world = {
     arena: ARENA, walls: WALLS, bulletSpeed: BULLET_SPEED, radarRange: RADAR_RANGE, time: battleTime,
     scan: (angle, width) => (scanned ? null : ((scanned = true), scan(r, angle, width))),
     wallDist: (angle) => rayLength(r.x, r.z, angle, RADAR_RANGE),
+    radio,
   };
   try {
     return Strategies[r.strategy].think(r, world) || {};
@@ -683,7 +708,7 @@ function livingTeamCount() {
 }
 
 function update(dt) {
-  if (phase === 'battle') battleTime += dt;
+  if (phase === 'battle') { battleTime += dt; deliverRadio(); }
   for (const r of robots) {
     r.recoil = r.recoil.map((v) => Math.max(0, v - dt * 3));
     r.hit = Math.max(0, r.hit - dt * 4);
@@ -717,6 +742,8 @@ function update(dt) {
   impacts = impacts.filter((i) => i.age < RobotGfx.IMPACT_TIME);
   for (const c of crumbles) c.age += dt;
   crumbles = crumbles.filter((c) => c.age < RobotGfx.CRUMBLE_TIME);
+  for (const p of radioPulses) p.age += dt;
+  radioPulses = radioPulses.filter((p) => p.age < RobotGfx.RADIO_PULSE_TIME);
 
   // clear per-frame collision flags before resolving collisions this frame
   for (const r of robots) { r.wallHit = false; r.robotHit = false; }
@@ -883,6 +910,7 @@ function showSetup() {
   document.getElementById('layoutPick').value = config.layout;
   document.getElementById('groundPick').value = config.ground;
   document.getElementById('teamsMode').checked = config.teamsMode;
+  document.getElementById('radioEnabled').checked = config.radioEnabled;
   document.getElementById('robotCount').value = config.robotCount;
   document.getElementById('teamCount').value = config.teamCount;
   document.getElementById('robotsPerTeam').value = config.robotsPerTeam;
@@ -933,6 +961,10 @@ document.getElementById('layoutPick').addEventListener('change', (e) => {
   config.layout = e.target.value;
   newRound();
   schedulePreview();
+});
+
+document.getElementById('radioEnabled').addEventListener('change', (e) => {
+  config.radioEnabled = e.target.checked;
 });
 
 document.getElementById('teamsMode').addEventListener('change', (e) => {
@@ -1346,6 +1378,7 @@ function frame(now) {
   gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
   gfx.drawWalls(WALLS);
   for (const m of mines) gfx.drawMine(m, simTime);
+  for (const p of radioPulses) gfx.drawRadioPulse(p);
   for (const r of robots) gfx.drawRadar(r);
   for (const r of robots) gfx.drawRobot(r, simTime);
   for (const b of bullets) gfx.drawBullet(b);
@@ -1378,6 +1411,7 @@ function frame(now) {
       gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
       gfx.drawWalls(WALLS);
       for (const m of mines) gfx.drawMine(m, simTime);
+      for (const p of radioPulses) gfx.drawRadioPulse(p);
       for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
       for (const b of bullets) gfx.drawBullet(b);
       for (const i of impacts) gfx.drawImpact(i);
