@@ -27,11 +27,13 @@
   .count-row { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin-bottom: 10px; font-size: 13px; }
   .count-row label { display: flex; align-items: center; gap: 8px; }
   .count-row input[type=number] { width: 50px; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid #b8c2d4; }
-  .team-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px;
-                font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.65; }
+  .team-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .team-id { display: flex; align-items: center; gap: 8px; min-width: 72px; padding-top: 7px;
+             font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.65; flex-shrink: 0; }
+  .team-selects { display: flex; gap: 10px; align-items: center; }
   .slot { display: grid; grid-template-columns: 18px 70px 1fr; gap: 4px 10px; align-items: center; margin-bottom: 12px; }
   .slot small { grid-column: 3; color: #5a6478; font-size: 12px; line-height: 1.35; }
-  .slot select { font: inherit; padding: 5px 6px; border-radius: 6px; border: 1px solid #b8c2d4; background: #fff; }
+  .slot select, .team-selects select { font: inherit; padding: 5px 6px; border-radius: 6px; border: 1px solid #b8c2d4; background: #fff; }
   .dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
   .buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
   button { font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 8px; border: 1px solid #b8c2d4;
@@ -844,28 +846,29 @@ function buildTeamSlots() {
     const team = TEAMS[t % TEAMS.length];
     while (config.teamStrategies[t].length < config.robotsPerTeam)
       config.teamStrategies[t].push(STRATEGY_KEYS[config.teamStrategies[t].length % STRATEGY_KEYS.length]);
-    const hdr = document.createElement('div');
-    hdr.className = 'team-label';
-    hdr.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b>`;
-    teamSlots.append(hdr);
+    const teamRow = document.createElement('div');
+    teamRow.className = 'team-row';
+    const idDiv = document.createElement('div');
+    idDiv.className = 'team-id';
+    idDiv.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b>`;
+    teamRow.append(idDiv);
+    const selectsDiv = document.createElement('div');
+    selectsDiv.className = 'team-selects';
     for (let ri = 0; ri < config.robotsPerTeam; ri++) {
-      const row = document.createElement('div');
-      row.className = 'slot';
-      row.innerHTML = `<span></span><b>Robot ${ri + 1}</b><select></select><small></small>`;
-      const select = row.querySelector('select'), info = row.querySelector('small');
+      const select = document.createElement('select');
       for (const key of STRATEGY_KEYS) select.add(new Option(Strategies[key].name, key));
       select.value = config.teamStrategies[t][ri];
-      info.textContent = Strategies[config.teamStrategies[t][ri]].description;
       const captT = t, captRi = ri;
       select.addEventListener('change', () => {
         config.teamStrategies[captT][captRi] = select.value;
-        info.textContent = Strategies[select.value].description;
         const r = robots.find((r) => r.teamId === captT && r.robotIndex === captRi);
         if (r) r.strategy = select.value;
         buildBoard();
       });
-      teamSlots.append(row);
+      selectsDiv.append(select);
     }
+    teamRow.append(selectsDiv);
+    teamSlots.append(teamRow);
   }
 }
 
