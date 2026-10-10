@@ -242,6 +242,48 @@
       },
     },
 
+    ingwa: {
+      name: 'Ingwa',
+      description: 'Charges around like Rambo, but when it spots an enemy cornered against the arena edge it backs away and lobs a howitzer shell into the corner.',
+      think(me, world) {
+        const m = me.mem;
+        if (!m.goal || dist(me, m.goal) < 1 || (me.blocked && !m.wasBlocked)) m.goal = randomOpenPoint(world);
+        m.wasBlocked = me.blocked;
+
+        const seen = radarTrack(me, world);
+        broadcastEnemy(me, world, seen);
+
+        if (seen) {
+          const enemy = pointAt(me, seen.angle, seen.dist);
+          const edgeThresh = world.arena * 0.65;
+          const cornered = Math.abs(enemy.x) > edgeThresh && Math.abs(enemy.z) > edgeThresh;
+
+          if (cornered && world.howitzer.ready && world.howitzer.canReach(enemy.x, enemy.z)) {
+            // Pick a goal far from the enemy corner so we're not against the wall when we fire.
+            if (!m.cornerGoal || world.time - (m.cornerGoalTime ?? 0) > 3) {
+              let best = randomOpenPoint(world);
+              for (let i = 0; i < 15; i++) {
+                const p = randomOpenPoint(world);
+                if (dist(p, enemy) > dist(best, enemy)) best = p;
+              }
+              m.cornerGoal = best;
+              m.cornerGoalTime = world.time;
+            }
+            m.goal = m.cornerGoal;
+            return { moveTo: m.goal, speed: 1.2, aim: seen.angle, fire: true,
+                     fireHowitzer: enemy };
+          }
+        }
+
+        if (!seen) {
+          const tip = radioEnemyTip(world);
+          if (tip) m.goal = tip;
+        }
+        return { moveTo: m.goal, speed: 1.2, aim: seen ? seen.angle : null, fire: !!seen,
+                 ...(!seen ? howitzerAtTip(me, world) : {}) };
+      },
+    },
+
     // After Richard A. Fowell's NORDEN+, winner of Computer Gaming World's ROBOTWAR tournament.
     norden: {
       name: 'NORDEN+',
