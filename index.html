@@ -89,6 +89,14 @@
           <option value="downtown">Downtown</option>
         </select>
       </label>
+      <label>Ground:
+        <select id="groundPick">
+          <option value="checker" selected>Checkerboard</option>
+          <option value="grass">Grass</option>
+          <option value="asphalt">Asphalt</option>
+          <option value="concrete">Concrete</option>
+        </select>
+      </label>
       <label>Wall strength:
         <select id="wallHp">
           <option value="1">Flimsy (1 hit)</option>
@@ -207,9 +215,10 @@ function buildWalls(layoutKey, arena, wallHp = 2) {
   return blocks;
 }
 
-// A city centre: a grid of streets (including one all the way round the edge) with city blocks
-// between them. Each city block is split into a few buildings of different heights and kinds;
-// now and then a lot is left empty as a little square. Seeded by the arena size, so the city
+// A city centre: streets of uneven width (including one all the way round the edge) with city
+// blocks of uneven size between them, some joined across a street. Each block is split into
+// buildings of different sizes, heights and kinds; some stand back from the street, and now
+// and then a lot or a whole block is left open as a square. Seeded by the arena size, so the city
 // in the setup preview is the one you fight in.
 // Each kind has a facade photo (textures/, CC0 from ambientCG); tile is how many world units
 // one copy of the photo covers, so that a storey is about 0.9 units on every kind. color is the
@@ -222,36 +231,89 @@ const BUILDING_KINDS = [
   { tex: 'facade-dark-office.jpg',  tile: 28.8, color: [0.37, 0.33, 0.31], minH: 2.6, maxH: 4.6 },
 ];
 const STREET = 3.2;
-gfx.loadFacades(BUILDING_KINDS.map((k) => 'textures/' + k.tex));
+// Floor choices; tile is how many world units one copy of the photo covers (CC0, ambientCG).
+const GROUND_KINDS = {
+  checker: null,
+  grass:    { tex: 'ground-grass.jpg',    tile: 4 },
+  asphalt:  { tex: 'ground-asphalt.jpg',  tile: 4 },
+  concrete: { tex: 'ground-concrete.jpg', tile: 4 },
+};
+
+// One texture array holds every photo: the facades first (layer = building kind), then the grounds.
+const TEXTURE_FILES = BUILDING_KINDS.map((k) => k.tex);
+for (const g of Object.values(GROUND_KINDS)) if (g) g.layer = TEXTURE_FILES.push(g.tex) - 1;
+gfx.loadTextures(TEXTURE_FILES.map((f) => 'textures/' + f));
 
 function buildDowntown(arena, addBox) {
   let seed = 1013904223 + arena * 7919;
   const rand = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  const lo = -arena + STREET, inner = 2 * (arena - STREET);
-  const n = Math.max(1, Math.round((inner + STREET) / (5.5 + STREET)));
-  const size = (inner - (n - 1) * STREET) / n;
-  // Split a span into 1 or 2 lots, never thinner than 2.
-  const split = (a, b) => {
-    if (b - a < 4 || rand() < 0.25) return [[a, b]];
-    const m = a + (b - a) * (0.4 + rand() * 0.2);
-    return [[a, m], [m, b]];
-  };
-  for (let bi = 0; bi < n; bi++)
-    for (let bj = 0; bj < n; bj++) {
-      const x0 = lo + bi * (size + STREET), z0 = lo + bj * (size + STREET);
-      for (const [lx0, lx1] of split(x0, x0 + size))
-        for (const [lz0, lz1] of split(z0, z0 + size)) {
-          if (rand() < 0.12) continue; // empty lot
-          const k = Math.floor(rand() * BUILDING_KINDS.length), kind = BUILDING_KINDS[k];
-          const h = kind.minH + rand() * (kind.maxH - kind.minH);
-          const shade = 0.9 + rand() * 0.2;
-          addBox(lx0, lz0, lx1, lz1, {
-            h, color: kind.color.map((v) => Math.min(1, v * shade)),
-            facade: { layer: k, tile: kind.tile, tint: Math.min(1.1, 1.05 * shade) },
-            building: {}, // shared by all its blocks; lets the renderer draw it whole while undamaged
-          });
-        }
+  const range = (a, b) => a + rand() * (b - a);
+
+  // Cut one axis into city blocks of uneven width, with streets of uneven width between them
+  // (now and then a wide avenue). Each axis is cut on its own, so the grid doesn't line up.
+  const cutAxis = () => {
+    const lo = -arena + STREET, inner = 2 * (arena - STREET);
+    const n = Math.max(1, Math.round((inner + 3.4) / (6.5 + 3.4)));
+    const streets = Array.from({ length: n - 1 }, () => (rand() < 0.2 ? range(4.4, 5.2) : range(2.6, 3.8)));
+    const weights = Array.from({ length: n }, () => range(0.4, 2));
+    const room = inner - streets.reduce((a, b) => a + b, 0), wsum = weights.reduce((a, b) => a + b, 0);
+    const spans = [];
+    let a = lo;
+    for (let i = 0; i < n; i++) {
+      const w = (room * weights[i]) / wsum;
+      spans.push([a, a + w]);
+      a += w + (streets[i] ?? 0);
     }
+    return spans;
+  };
+  const xs = cutAxis(), zs = cutAxis();
+
+  // City blocks, some merged with a neighbour across the street between them so that street
+  // ends in a T. A block merges at most once, so no crossing loses all its streets.
+  const merged = new Set(), blocks = [];
+  for (let i = 0; i < xs.length; i++)
+    for (let j = 0; j < zs.length; j++) {
+      if (merged.has(i + ',' + j)) continue;
+      let [x0, x1] = xs[i], [z0, z1] = zs[j];
+      if (rand() < 0.25) {
+        const right = i + 1 < xs.length && !merged.has(i + 1 + ',' + j);
+        const down = j + 1 < zs.length && !merged.has(i + ',' + (j + 1));
+        if (right && (!down || rand() < 0.5)) { x1 = xs[i + 1][1]; merged.add(i + 1 + ',' + j); }
+        else if (down) { z1 = zs[j + 1][1]; merged.add(i + ',' + (j + 1)); }
+      }
+      blocks.push([x0, z0, x1, z1]);
+    }
+
+  // Split a block into lots: cut the longer side somewhere between a third and two thirds,
+  // again and again while the pieces are big enough.
+  const lots = [];
+  const split = (x0, z0, x1, z1, depth) => {
+    const w = x1 - x0, d = z1 - z0, long = Math.max(w, d);
+    if (long < 4.6 || (depth > 0 && rand() < 0.3) || depth > 3) { lots.push([x0, z0, x1, z1]); return; }
+    const t = range(Math.max(0.3, 2.2 / long), Math.min(0.7, 1 - 2.2 / long)); // no lot thinner than 2.2
+    if (w >= d) { const m = x0 + w * t; split(x0, z0, m, z1, depth + 1); split(m, z0, x1, z1, depth + 1); }
+    else { const m = z0 + d * t; split(x0, z0, x1, m, depth + 1); split(x0, m, x1, z1, depth + 1); }
+  };
+  for (const b of blocks) {
+    if (rand() < 0.07) continue; // a whole block left open as a square
+    split(...b, 0);
+  }
+
+  for (let [x0, z0, x1, z1] of lots) {
+    if (rand() < 0.08) continue; // empty lot
+    // Some buildings stand back from the street on a side or two, if they stay big enough.
+    const back = (len) => (len > 3 && rand() < 0.25 ? range(0.3, 0.7) : 0);
+    const bx = x1 - x0, bz = z1 - z0;
+    x0 += back(bx); x1 -= back(bx); z0 += back(bz); z1 -= back(bz);
+    const k = Math.floor(rand() * BUILDING_KINDS.length), kind = BUILDING_KINDS[k];
+    const h = kind.minH + rand() * (kind.maxH - kind.minH);
+    const shade = 0.9 + rand() * 0.2;
+    addBox(x0, z0, x1, z1, {
+      h, color: kind.color.map((v) => Math.min(1, v * shade)),
+      facade: { layer: k, tile: kind.tile, tint: Math.min(1.1, 1.05 * shade) },
+      building: {}, // shared by all its blocks; lets the renderer draw it whole while undamaged
+    });
+  }
 }
 
 let ARENA = 14;
@@ -261,7 +323,7 @@ let WALLS = buildWalls('cross', ARENA);
 const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
-  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2,
+  arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2, ground: 'checker',
   teamsMode: false,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
@@ -272,11 +334,12 @@ try {
   const saved = JSON.parse(localStorage.getItem('robotwar.config'));
   if (saved && typeof saved === 'object') {
     if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
-    if (saved.layout in WALL_LAYOUTS) config.layout = saved.layout;
+    if (saved.layout in WALL_LAYOUTS || saved.layout === 'downtown') config.layout = saved.layout;
     if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
     if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
     if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
     if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
+    if (saved.ground in GROUND_KINDS) config.ground = saved.ground;
     if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
     if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
     if (Array.isArray(saved.strategies))
@@ -815,6 +878,7 @@ function showSetup() {
   document.getElementById('mineDamage').value = config.mineDamage;
   document.getElementById('wallHp').value = config.wallHp;
   document.getElementById('layoutPick').value = config.layout;
+  document.getElementById('groundPick').value = config.ground;
   document.getElementById('teamsMode').checked = config.teamsMode;
   document.getElementById('robotCount').value = config.robotCount;
   document.getElementById('teamCount').value = config.teamCount;
@@ -854,6 +918,11 @@ document.getElementById('mineDamage').addEventListener('change', (e) => {
 document.getElementById('wallHp').addEventListener('change', (e) => {
   config.wallHp = +e.target.value;
   newRound();
+  schedulePreview();
+});
+
+document.getElementById('groundPick').addEventListener('change', (e) => {
+  config.ground = e.target.value;
   schedulePreview();
 });
 
@@ -908,8 +977,13 @@ document.getElementById('shuffle').addEventListener('click', () => {
   schedulePreview();
 });
 
+// Remember the setup as soon as anything in it changes (the controls' own handlers have
+// updated config by the time the event bubbles up here), and again when a battle starts.
+const saveConfig = () => { try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {} };
+for (const type of ['input', 'change', 'click']) setup.addEventListener(type, saveConfig);
+
 document.getElementById('fight').addEventListener('click', () => {
-  try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {}
+  saveConfig();
   newRound();
   autoCam.target = null;
   autoCam.savedDist = dist;
@@ -1042,11 +1116,13 @@ let camAspect = 1.6;
 const camEye = (y, p, d = dist) => [camCenter.x + Math.sin(y) * Math.cos(p) * d, Math.sin(p) * d, camCenter.z + Math.cos(y) * Math.cos(p) * d];
 const camTarget = () => [camCenter.x, 0.4, camCenter.z];
 const CAM_FOV = (35 * Math.PI) / 180;
+// Far enough back to see the whole arena, however big it is.
+const maxCamDist = () => Math.max(60, ARENA * 4.2);
 
 // The closest camera distance (for this yaw and pitch) at which every point still lands inside
 // the middle of the picture, leaving a margin for the scoreboard and the robots' signs.
 function fitDist(points) {
-  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 200);
+  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 500);
   const fits = (d) => {
     const m = mat4.mul(proj, mat4.lookAt(camEye(yaw, pitch, d), camTarget(), [0, 1, 0]));
     return points.every(([x, y, z]) => {
@@ -1055,7 +1131,7 @@ function fitDist(points) {
       return w > 0.5 && Math.abs(cx / w) < 0.88 && Math.abs(cy / w) < 0.85;
     });
   };
-  let lo = 10, hi = 60;
+  let lo = 10, hi = maxCamDist();
   if (fits(lo)) return lo;
   for (let i = 0; i < 18; i++) { const mid = (lo + hi) / 2; if (fits(mid)) hi = mid; else lo = mid; }
   return hi;
@@ -1116,7 +1192,7 @@ function updateAutoCam(dt) {
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   autoCam.holdUntil = performance.now() + 6000;
-  dist = Math.max(6, Math.min(60, dist * (1 + e.deltaY * 0.001)));
+  dist = Math.max(6, Math.min(maxCamDist(), dist * (1 + e.deltaY * 0.001)));
 }, { passive: false });
 addEventListener('keydown', (e) => {
   if (e.target.closest('select, button, input')) return;
@@ -1262,9 +1338,9 @@ function frame(now) {
   camAspect = mainW / canvas.height;
   const eye = camEye(yaw, pitch);
   const view = mat4.lookAt(eye, camTarget(), [0, 1, 0]);
-  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 200);
+  const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 500);
   gfx.begin(mat4.mul(proj, view), eye);
-  gfx.drawArena(ARENA);
+  gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
   gfx.drawWalls(WALLS);
   for (const m of mines) gfx.drawMine(m, simTime);
   for (const r of robots) gfx.drawRadar(r);
@@ -1296,7 +1372,7 @@ function frame(now) {
       const eyeView = mat4.lookAt(eyePos, lookPt, [0, 1, 0]);
       const eyeProj = mat4.perspective((65 * Math.PI) / 180, pw / ph, 0.3, 200);
       gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
-      gfx.drawArena(ARENA);
+      gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
       gfx.drawWalls(WALLS);
       for (const m of mines) gfx.drawMine(m, simTime);
       for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);

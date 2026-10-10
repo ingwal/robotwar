@@ -3,11 +3,11 @@
 // Usage:
 //   const gfx = RobotGfx.create(gl);
 //   gfx.begin(viewProj, eye);          // once per frame
-//   gfx.drawArena(halfSize);
+//   gfx.drawArena(halfSize, ground?);              // ground = { layer, tile } textures the floor; else checkered
 //   gfx.drawRobot(robot, time);        // see ROBOT STATE below
 //   gfx.drawBullet(bullet);
 //   gfx.drawExplosion({ x, z, age, color, seed });  // done when age >= RobotGfx.EXPLOSION_TIME
-//   gfx.loadFacades([url, ...]);                   // 512x512 facade photos for textured walls
+//   gfx.loadTextures([url, ...]);                  // 512x512 photos (facades, ground); layer = index
 //   gfx.drawWalls([{ x0, z0, x1, z1, h?, color?, facade?, hp?, maxHp? }, ...]); // interior walls, axis-aligned boxes;
 //                                                  // facade = { layer, tile, tint } picks a loaded photo
 //   gfx.drawRadar(robot);                          // the robot's last radar scan, if any (robot.scan)
@@ -186,7 +186,8 @@ void main() {
   gl_Position = uViewProj * w;
 }`;
 
-  // uMode: 0 = lit part, 1 = soft blob shadow, 2 = checkered floor, 3 = glow, 4 = textured facade, 5 = puff
+  // uMode: 0 = lit part, 1 = soft blob shadow, 2 = checkered floor, 3 = glow, 4 = textured facade, 5 = puff,
+  // 6 = textured ground
   const FS = `#version 300 es
 precision highp float;
 precision highp sampler2DArray;
@@ -194,7 +195,7 @@ in vec3 vNor, vWorld, vLocal;
 uniform vec3 uColor, uEye;
 uniform float uEmissive, uFlash, uAlpha, uLayer, uTile, uTop;
 uniform int uMode;
-uniform sampler2DArray uFacade;
+uniform sampler2DArray uTex;
 out vec4 outColor;
 void main() {
   if (uMode == 3) {
@@ -224,6 +225,10 @@ void main() {
     base *= mix(1.0, 0.92, mod(cell.x + cell.y, 2.0));
     shiny = 0.0;
   }
+  if (uMode == 6) {
+    base = texture(uTex, vec3(vWorld.xz / uTile, uLayer)).rgb * uColor;
+    shiny = 0.0;
+  }
   if (uMode == 4) {
     // Facade photo on the walls, in world coordinates so it runs on across neighbouring blocks
     // and every storey starts at the ground; uColor tints it (damage darkens). Flat roofs.
@@ -234,7 +239,7 @@ void main() {
     // rounded edges show roof instead of the blocks' inner walls.
     if (abs(N.y) < 0.5 && vWorld.y < uTop - 0.03) {
       float u = abs(N.x) > abs(N.z) ? vWorld.z : vWorld.x;
-      base = texture(uFacade, vec3(vec2(u, -vWorld.y) / uTile, uLayer)).rgb * uColor * 1.4;
+      base = texture(uTex, vec3(vec2(u, -vWorld.y) / uTile, uLayer)).rgb * uColor * 1.4;
     } else {
       base = vec3(0.62, 0.62, 0.6) * uColor;
       N = vec3(0.0, 1.0, 0.0);
@@ -323,21 +328,21 @@ void main() {
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     const u = {};
-    for (const n of ['uViewProj', 'uModel', 'uColor', 'uEye', 'uEmissive', 'uFlash', 'uAlpha', 'uMode', 'uLayer', 'uTile', 'uTop', 'uFacade'])
+    for (const n of ['uViewProj', 'uModel', 'uColor', 'uEye', 'uEmissive', 'uFlash', 'uAlpha', 'uMode', 'uLayer', 'uTile', 'uTop', 'uTex'])
       u[n] = gl.getUniformLocation(prog, n);
 
-    // Facade photos live in one texture array, one layer each. Layers start mid-grey and fill
-    // in as the images arrive. All images must be FACADE_SIZE square.
-    const FACADE_SIZE = 512;
-    let facadeTex = null;
-    function loadFacades(urls) {
-      facadeTex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
-      const levels = Math.log2(FACADE_SIZE) + 1;
-      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, levels, gl.RGBA8, FACADE_SIZE, FACADE_SIZE, urls.length);
-      const grey = new Uint8Array(FACADE_SIZE * FACADE_SIZE * 4).fill(150);
+    // Photo textures (building facades, ground) live in one texture array, one layer each.
+    // Layers start mid-grey and fill in as the images arrive. All images must be TEX_SIZE square.
+    const TEX_SIZE = 512;
+    let texArray = null;
+    function loadTextures(urls) {
+      texArray = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, texArray);
+      const levels = Math.log2(TEX_SIZE) + 1;
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, levels, gl.RGBA8, TEX_SIZE, TEX_SIZE, urls.length);
+      const grey = new Uint8Array(TEX_SIZE * TEX_SIZE * 4).fill(150);
       for (let i = 0; i < urls.length; i++)
-        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, FACADE_SIZE, FACADE_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, grey);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, TEX_SIZE, TEX_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, grey);
       gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
       gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
       gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -346,8 +351,8 @@ void main() {
       urls.forEach((url, i) => {
         const img = new Image();
         img.onload = () => {
-          gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
-          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, FACADE_SIZE, FACADE_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, img);
+          gl.bindTexture(gl.TEXTURE_2D_ARRAY, texArray);
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, TEX_SIZE, TEX_SIZE, 1, gl.RGBA, gl.UNSIGNED_BYTE, img);
           gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
         };
         img.src = url;
@@ -410,16 +415,21 @@ void main() {
       gl.enable(gl.DEPTH_TEST);
       gl.uniformMatrix4fv(u.uViewProj, false, viewProj);
       gl.uniform3fv(u.uEye, eye);
-      gl.uniform1i(u.uFacade, 0);
+      gl.uniform1i(u.uTex, 0);
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, facadeTex);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, texArray);
       eyePos = eye;
       flash = 0;
     }
 
-    function drawArena(half) {
+    function drawArena(half, ground) {
       flash = 0;
-      draw(M.slab, chain(translate(0, -0.1, 0), scale(half * 2, 0.2, half * 2)), FLOOR, 0, 2);
+      const floor = chain(translate(0, -0.1, 0), scale(half * 2, 0.2, half * 2));
+      if (ground && texArray) {
+        gl.uniform1f(u.uLayer, ground.layer);
+        gl.uniform1f(u.uTile, ground.tile);
+        draw(M.slab, floor, [1, 1, 1], 0, 6);
+      } else draw(M.slab, floor, FLOOR, 0, 2);
       const t = 0.3, h = 0.35, len = half * 2 + t;
       for (const s of [-1, 1]) {
         draw(M.slab, chain(translate(s * (half + t / 2), h / 2, 0), scale(t, h, len)), WALL);
@@ -581,7 +591,7 @@ void main() {
         const cx = (w.x0 + w.x1) / 2, cz = (w.z0 + w.z1) / 2, sx = w.x1 - w.x0, sz = w.z1 - w.z0;
         // Damaged blocks sink and darken, so you can see which ones are about to go.
         const f = w.maxHp ? w.hp / w.maxHp : 1, h = (w.h ?? WALL_HEIGHT) * (0.45 + 0.55 * f);
-        if (w.facade && facadeTex) {
+        if (w.facade && texArray) {
           // w.facade = { layer, tile, tint }: which photo, how many world units one copy covers
           const tint = w.facade.tint * (0.7 + 0.3 * f);
           gl.uniform1f(u.uLayer, w.facade.layer);
@@ -713,7 +723,7 @@ void main() {
       }
     }
 
-    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadFacades };
+    return { begin, drawArena, drawWalls, drawRadar, drawRobot, drawBullet, drawImpact, drawExplosion, drawCrumble, drawMine, drawShadow, loadTextures };
   }
 
   global.RobotGfx = { create, mat4, EXPLOSION_TIME, IMPACT_TIME, CRUMBLE_TIME, WALL_HEIGHT };
