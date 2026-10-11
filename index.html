@@ -338,29 +338,65 @@ let config = {
   teamCount: 2, robotsPerTeam: 2,
   teamStrategies: [['rambo', 'pacer'], ['sniper', 'hunter']],
 };
-try {
-  const saved = JSON.parse(localStorage.getItem('robotwar.config'));
-  if (saved && typeof saved === 'object') {
-    if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
-    if (saved.layout in WALL_LAYOUTS || saved.layout === 'downtown') config.layout = saved.layout;
-    if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
-    if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
-    if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
-    if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
-    if (saved.ground in GROUND_KINDS) config.ground = saved.ground;
-    if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
-    if (typeof saved.radioEnabled === 'boolean') config.radioEnabled = saved.radioEnabled;
-    if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
-    if (Array.isArray(saved.strategies))
-      config.strategies = saved.strategies.slice(0, 8).map((k) => (k in Strategies ? k : STRATEGY_KEYS[0]));
-    if (saved.teamCount >= 2 && saved.teamCount <= 4) config.teamCount = saved.teamCount | 0;
-    if (saved.robotsPerTeam >= 1 && saved.robotsPerTeam <= 4) config.robotsPerTeam = saved.robotsPerTeam | 0;
-    if (Array.isArray(saved.teamStrategies))
-      config.teamStrategies = saved.teamStrategies.slice(0, 4).map((arr) =>
-        Array.isArray(arr) ? arr.slice(0, 4).map((k) => (k in Strategies ? k : STRATEGY_KEYS[0])) : []
-      );
+// Copy over whatever is valid in saved (from this browser's storage or from the address);
+// anything missing or out of range keeps its current value.
+function applySaved(saved) {
+  if (!saved || typeof saved !== 'object') return;
+  const isStrategy = (k) => typeof k === 'string' && Object.hasOwn(Strategies, k);
+  if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
+  if (Object.hasOwn(WALL_LAYOUTS, saved.layout) || saved.layout === 'downtown') config.layout = saved.layout;
+  if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
+  if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
+  if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
+  if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
+  if (Object.hasOwn(GROUND_KINDS, saved.ground)) config.ground = saved.ground;
+  if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
+  if (typeof saved.radioEnabled === 'boolean') config.radioEnabled = saved.radioEnabled;
+  if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
+  if (Array.isArray(saved.strategies))
+    config.strategies = saved.strategies.slice(0, 8).map((k) => (isStrategy(k) ? k : STRATEGY_KEYS[0]));
+  if (saved.teamCount >= 2 && saved.teamCount <= 4) config.teamCount = saved.teamCount | 0;
+  if (saved.robotsPerTeam >= 1 && saved.robotsPerTeam <= 4) config.robotsPerTeam = saved.robotsPerTeam | 0;
+  if (Array.isArray(saved.teamStrategies))
+    config.teamStrategies = saved.teamStrategies.slice(0, 4).map((arr) =>
+      Array.isArray(arr) ? arr.slice(0, 4).map((k) => (isStrategy(k) ? k : STRATEGY_KEYS[0])) : []
+    );
+}
+
+// ---------- settings in the address ----------
+// The setup is mirrored in the page's address, so a battle can be bookmarked or shared:
+//   ?arena=14&layout=downtown&ground=grass&shots=6&walls=2&mines=5&blast=2&robots=rambo,norden,sniper
+//   ?...&mode=teams&teams=rambo,pacer.sniper,hunter        (one team after another, split by ".")
+// walls=0 is indestructible, blast=0 deadly, radio=0 turns team radio off. An address with settings wins over what this
+// browser remembered.
+function configToQuery(c) {
+  const p = [['arena', c.arenaSize], ['layout', c.layout], ['ground', c.ground], ['shots', c.shotsToKill],
+    ['walls', c.wallHp], ['mines', c.mineCount], ['blast', c.mineDamage], ['radio', c.radioEnabled ? 1 : 0]];
+  if (c.teamsMode)
+    p.push(['mode', 'teams'], ['teams', c.teamStrategies.slice(0, c.teamCount).map((t) => t.slice(0, c.robotsPerTeam).join(',')).join('.')]);
+  else p.push(['robots', c.strategies.slice(0, c.robotCount).join(',')]);
+  return p.map(([k, v]) => k + '=' + encodeURIComponent(v).replace(/%2C/g, ',')).join('&');
+}
+
+function configFromQuery(search) {
+  const q = new URLSearchParams(search), c = {};
+  const num = (k) => (q.has(k) && q.get(k) !== '' ? Number(q.get(k)) : undefined);
+  c.arenaSize = num('arena'); c.shotsToKill = num('shots'); c.wallHp = num('walls');
+  c.mineCount = num('mines'); c.mineDamage = num('blast');
+  c.layout = q.get('layout') ?? undefined; c.ground = q.get('ground') ?? undefined;
+  if (q.has('mode')) c.teamsMode = q.get('mode') === 'teams';
+  if (q.has('radio')) c.radioEnabled = q.get('radio') !== '0';
+  if (q.get('robots')) { c.strategies = q.get('robots').split(','); c.robotCount = c.strategies.length; }
+  if (q.get('teams')) {
+    c.teamStrategies = q.get('teams').split('.').map((t) => t.split(','));
+    c.teamCount = c.teamStrategies.length;
+    c.robotsPerTeam = Math.max(...c.teamStrategies.map((t) => t.length));
   }
-} catch {}
+  return c;
+}
+
+try { applySaved(JSON.parse(localStorage.getItem('robotwar.config'))); } catch {}
+applySaved(configFromQuery(location.search));
 
 let phase = 'setup';
 let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], radioPulses = [], roundOverTimer = 0, battleTime = 0;
@@ -1071,9 +1107,13 @@ document.getElementById('shuffle').addEventListener('click', () => {
   schedulePreview();
 });
 
-// Remember the setup as soon as anything in it changes (the controls' own handlers have
+// Remember the setup, here and in the address, as soon as anything in it changes (the controls' own handlers have
 // updated config by the time the event bubbles up here), and again when a battle starts.
-const saveConfig = () => { try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {} };
+const saveConfig = () => {
+  try { localStorage.setItem('robotwar.config', JSON.stringify(config)); } catch {}
+  try { history.replaceState(null, '', '?' + configToQuery(config) + location.hash); } catch {}
+};
+saveConfig(); // show the starting setup in the address straight away
 for (const type of ['input', 'change', 'click']) setup.addEventListener(type, saveConfig);
 
 document.getElementById('fight').addEventListener('click', () => {
