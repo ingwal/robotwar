@@ -75,6 +75,15 @@
     return null;
   }
 
+  // Broadcast own position to teammates every 2 s so they know where friendlies are.
+  function broadcastPosition(me, world) {
+    if (!world.radio) return;
+    if (world.time - (me.mem.lastPosBroadcast ?? -99) > 2) {
+      world.radio.send({ type: 'position', x: me.x, z: me.z });
+      me.mem.lastPosBroadcast = world.time;
+    }
+  }
+
   // Broadcast the seen target's world position if radio is on and enough time has passed.
   // seen must be { angle, dist } as returned by radarTrack.
   function broadcastEnemy(me, world, seen) {
@@ -123,6 +132,7 @@
         m.wasBlocked = me.blocked;
         const seen = radarTrack(me, world);
         broadcastEnemy(me, world, seen);
+        broadcastPosition(me, world);
         if (!seen) {
           const tip = radioEnemyTip(world);
           if (tip) m.goal = tip; // charge straight toward the reported position
@@ -140,6 +150,7 @@
         m.dir ??= me.x < 0 ? 1 : -1;
         if ((m.dir > 0 && me.x > edge - 0.5) || (m.dir < 0 && me.x < -edge + 0.5) || (me.blocked && !m.wasBlocked)) m.dir = -m.dir;
         m.wasBlocked = me.blocked;
+        broadcastPosition(me, world);
         // Swing radar toward a radio tip when idle; fall back to default straight-up sweep.
         const tip = radioEnemyTip(world);
         const scanAngle = tip ? angleTo(me, tip) : Math.PI;
@@ -168,6 +179,7 @@
         if (m.hitsHere >= 2) { m.corner = (m.corner + 1) % 4; m.hitsHere = 0; }
         const seen = radarTrack(me, world, 0.07);
         broadcastEnemy(me, world, seen);
+        broadcastPosition(me, world);
         if (!seen) {
           // Jump the sweep to face a radio-tipped enemy rather than continuing the blind sweep.
           const tip = radioEnemyTip(world);
@@ -185,6 +197,7 @@
         const m = me.mem;
         const seen = radarTrack(me, world);
         broadcastEnemy(me, world, seen);
+        broadcastPosition(me, world);
         if (seen && !me.blocked) {
           const prey = pointAt(me, seen.angle, seen.dist);
           const around = angleTo(prey, me) + 0.5;
@@ -214,6 +227,7 @@
         const hurt = m.lastHp !== undefined && me.hp < m.lastHp;
         m.lastHp = me.hp;
         broadcastEnemy(me, world, seen);
+        broadcastPosition(me, world);
         // When taking damage, broadcast the estimated attacker position as an enemy tip.
         if (hurt && world.radio && world.time - (m.lastDistress ?? -99) > 2) {
           world.radio.send({ type: 'enemy', ...pointAt(me, me.hitAngle, 6) });
@@ -253,6 +267,7 @@
 
         const seen = radarTrack(me, world);
         broadcastEnemy(me, world, seen);
+        broadcastPosition(me, world);
         if (seen && !me.blocked) {
           const prey = pointAt(me, seen.angle, seen.dist);
           const around = angleTo(prey, me) + 0.5;
@@ -335,6 +350,7 @@
           m.fixes = (m.fixes ?? []).filter((f) => world.time - f.t < 0.8);
           m.fixes.push({ ...pointAt(me, m.lock.angle, m.lock.dist), t: world.time });
         }
+        broadcastPosition(me, world);
         // Broadcast enemy position while locked.
         if (m.lock && world.radio && world.time - (m.lastBroadcast ?? -99) > 1.5) {
           world.radio.send({ type: 'enemy', ...pointAt(me, m.lock.angle, m.lock.dist) });
