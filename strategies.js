@@ -261,7 +261,7 @@
 
     ingwa: {
       name: 'Ingwa',
-      description: 'Hunts like Hunter with lead aiming. Disperses from teammates, bombards corners when idle, and scoots away after spotting an enemy with backup — knowing they may howitzer the contact point.',
+      description: 'Hunts like Hunter with lead aiming. Disperses from teammates, bombards corners when idle, and scoots after spotting an enemy whose team still has backup — tracked via global death messages.',
       think(me, world) {
         const m = me.mem;
         const c = world.arena - 1.2;
@@ -272,27 +272,19 @@
         broadcastEnemy(me, world, seen);
         broadcastPosition(me, world);
 
-        // Track own team deaths to know how many teammates remain.
+        // Track deaths per team from global death messages.
+        m.teamDeathCounts ??= {};
         if (world.radio) {
           for (const msg of world.radio.inbox)
-            if (msg.type === 'death' && msg.teamId === me.teamId)
-              m.teamDeaths = (m.teamDeaths ?? 0) + 1;
+            if (msg.type === 'death')
+              m.teamDeathCounts[msg.teamId] = (m.teamDeathCounts[msg.teamId] ?? 0) + 1;
         }
-
-        // Estimate enemy numbers from distinct radar contacts and radio tips.
-        m.enemySightings ??= [];
-        if (seen) {
-          const ep = pointAt(me, seen.angle, seen.dist);
-          if (!m.enemySightings.some(s => dist(s, ep) < 6 && world.time - s.t < 6))
-            m.enemySightings.push({ x: ep.x, z: ep.z, t: world.time });
-        }
-        if (world.radio) {
-          for (const msg of world.radio.inbox)
-            if (msg.type === 'enemy' && !m.enemySightings.some(s => dist(s, msg) < 6 && world.time - s.t < 6))
-              m.enemySightings.push({ x: msg.x, z: msg.z, t: world.time });
-        }
-        m.enemySightings = m.enemySightings.filter(s => world.time - s.t < 8);
-        const likelyEnemyCount = m.enemySightings.length;
+        // An enemy team "has backup" if they've lost ≤1 robot (≥2 likely remain).
+        // If no enemy deaths recorded yet, assume they're at full strength.
+        const enemyTeamDeaths = Object.entries(m.teamDeathCounts)
+          .filter(([tid]) => Number(tid) !== me.teamId);
+        const enemyHasBackup = enemyTeamDeaths.length === 0 ||
+          enemyTeamDeaths.some(([, n]) => n <= 1);
 
         // Hunter movement: circle prey when locked, chase radio tips when idle.
         if (seen && !me.blocked) {
@@ -330,7 +322,7 @@
 
         // Scoot after spotting an enemy with backup: they may howitzer our current position.
         let scooting = false;
-        if (seen && likelyEnemyCount >= 2) {
+        if (seen && enemyHasBackup) {
           if (!m.scootGoal || dist(me, m.scootGoal) < 2) {
             const awayAngle = seen.angle + Math.PI + (Math.random() - 0.5) * Math.PI;
             const raw = pointAt(me, awayAngle, 15);
