@@ -303,6 +303,35 @@
                      z: Math.max(-edge, Math.min(edge, raw.z)) };
         }
 
+        // Lead aiming: accumulate radar fixes and predict where the target will be.
+        if (seen) {
+          m.fixes = (m.fixes ?? []).filter(f => world.time - f.t < 0.8);
+          m.fixes.push({ ...pointAt(me, seen.angle, seen.dist), t: world.time });
+        } else {
+          m.fixes = [];
+        }
+        let aim = null, fire = false;
+        const fixes = m.fixes ?? [];
+        if (seen && fixes.length && world.time - fixes[fixes.length - 1].t < 0.4) {
+          const n = fixes.length, mt = fixes.reduce((s, f) => s + f.t, 0) / n;
+          const mx = fixes.reduce((s, f) => s + f.x, 0) / n, mz = fixes.reduce((s, f) => s + f.z, 0) / n;
+          const stt = fixes.reduce((s, f) => s + (f.t - mt) ** 2, 0);
+          let vx = 0, vz = 0;
+          if (n >= 5 && fixes[n - 1].t - fixes[0].t > 0.3) {
+            vx = fixes.reduce((s, f) => s + (f.t - mt) * (f.x - mx), 0) / stt;
+            vz = fixes.reduce((s, f) => s + (f.t - mt) * (f.z - mz), 0) / stt;
+            const v = Math.hypot(vx, vz), vmax = 2.4;
+            if (v > vmax) { vx *= vmax / v; vz *= vmax / v; }
+          }
+          let target = { x: mx, z: mz };
+          for (let i = 0; i < 3; i++) {
+            const t = world.time - mt + dist(me, target) / world.bulletSpeed;
+            target = { x: mx + vx * t, z: mz + vz * t };
+          }
+          aim = angleTo(me, target);
+          fire = true;
+        }
+
         // When no enemy visible, bombard corners in rotation.
         let howitzerCmd = {};
         if (!seen) {
@@ -313,8 +342,7 @@
           }
         }
 
-        return { moveTo: m.goal, speed: 1.1, aim: seen ? seen.angle : null, fire: !!seen,
-                 ...howitzerCmd };
+        return { moveTo: m.goal, speed: 1.1, aim, fire, ...howitzerCmd };
       },
     },
 
