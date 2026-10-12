@@ -484,6 +484,146 @@
                  ...(m.lock ? {} : howitzerAtTip(me, world)) };
       },
     },
+
+    // Written to beat Ingwa. Ingwa runs away in a straight line whenever it spots someone, so
+    // it is easy to lead with both guns and howitzer; it leads its own shots with a straight-line
+    // fit, so Kjell circles it and keeps reversing; and its howitzer only hits robots that stay
+    // near a corner or near a spot a teammate radioed in, so Kjell never stops moving.
+    kjell: {
+      name: 'Kjell',
+      description: 'Circles its target at long range, reversing often, and leads both cannon and howitzer shots. Never stands still, and in a team stays clear of teammates and of its own recent track.',
+      think(me, world) {
+        const m = me.mem;
+        const seen = radarTrack(me, world);
+        broadcastPosition(me, world);
+        const lim = world.arena - 0.8;
+        const ahead = (track, dt) => {
+          const t = world.time - track.t + dt;
+          return { x: Math.max(-lim, Math.min(lim, track.x + track.vx * t)), z: Math.max(-lim, Math.min(lim, track.z + track.vz * t)) };
+        };
+
+        // Target track: a straight-line fit through the last 0.8 s of radar fixes. A fix far from
+        // where the fit expects the target belongs to another robot, so start the fit over.
+        if (seen) {
+          const fix = { ...pointAt(me, seen.angle, seen.dist), t: world.time };
+          if (m.est && dist(fix, ahead(m.est, 0)) > 2.5) m.fixes = [];
+          m.fixes = (m.fixes ?? []).filter((f) => world.time - f.t < 0.8);
+          m.fixes.push(fix);
+        } else if (m.fixes?.length && world.time - m.fixes[m.fixes.length - 1].t > 0.4) m.fixes = [];
+        const fixes = m.fixes ?? [];
+        let est = null;
+        if (fixes.length) {
+          const n = fixes.length, mt = fixes.reduce((s, f) => s + f.t, 0) / n;
+          const mx = fixes.reduce((s, f) => s + f.x, 0) / n, mz = fixes.reduce((s, f) => s + f.z, 0) / n;
+          const stt = fixes.reduce((s, f) => s + (f.t - mt) ** 2, 0);
+          let vx = 0, vz = 0;
+          if (n >= 5 && fixes[n - 1].t - fixes[0].t > 0.3) {
+            vx = fixes.reduce((s, f) => s + (f.t - mt) * (f.x - mx), 0) / stt;
+            vz = fixes.reduce((s, f) => s + (f.t - mt) * (f.z - mz), 0) / stt;
+            const v = Math.hypot(vx, vz), vmax = 2.4;
+            if (v > vmax) { vx *= vmax / v; vz *= vmax / v; }
+          }
+          est = { x: mx, z: mz, vx, vz, t: mt };
+        }
+        m.est = est;
+
+        // Cannon: lead the target. The two barrels converge at the range of this frame's radar
+        // return, so only fire on a frame whose scan hit; a miss would converge them on the far wall.
+        let aim = null, fire = false;
+        if (seen && est) {
+          let target = ahead(est, 0);
+          for (let i = 0; i < 3; i++) target = ahead(est, dist(me, target) / world.bulletSpeed);
+          aim = angleTo(me, target);
+          fire = m.misses === 0;
+        }
+
+        // Tell teammates where the target is and how it moves (other strategies just read x, z).
+        if (seen && est && world.radio && world.time - (m.lastBroadcast ?? -99) > 1) {
+          world.radio.send({ type: 'enemy', ...ahead(est, 0), vx: est.vx, vz: est.vz });
+          m.lastBroadcast = world.time;
+        }
+        for (const msg of world.radio?.inbox ?? [])
+          if (msg.type === 'enemy' && msg.vx != null) m.mateTrack = { x: msg.x, z: msg.z, vx: msg.vx, vz: msg.vz, t: world.time };
+
+        // Howitzer: the shell flies for 3-4 s, so aim where our track (or a teammate's) says the
+        // target will be when it lands.
+        let howitzerCmd = {};
+        const track = est && world.time - est.t < 1 ? est : m.mateTrack && world.time - m.mateTrack.t < 1 ? m.mateTrack : null;
+        if (world.howitzer.ready && track) {
+          let target = ahead(track, 0);
+          for (let i = 0; i < 3; i++) {
+            const s = Math.min(1, dist(me, target) * 10 / 400), theta = Math.PI / 2 - Math.asin(s) / 2;
+            target = ahead(track, 2 * 20 * Math.sin(theta) / 10);
+          }
+          if (world.howitzer.canReach(target.x, target.z) && dist(me, target) > 4) howitzerCmd = { fireHowitzer: target };
+        }
+
+        // Remember where we have been, and where our teammates are.
+        if (world.time - (m.crumbT ?? -99) > 0.25) {
+          (m.trail ??= []).push({ x: me.x, z: me.z, t: world.time });
+          m.crumbT = world.time;
+          m.trail = m.trail.filter((p) => world.time - p.t < 10);
+        }
+        if (world.radio) {
+          if (world.time - (m.lastMateMsg ?? -99) > 0.5) {
+            world.radio.send({ type: 'kjell', x: me.x, z: me.z });
+            m.lastMateMsg = world.time;
+          }
+          for (const msg of world.radio.inbox)
+            if (msg.type === 'kjell' || msg.type === 'position') {
+              m.hasMates = true;
+              (m.mates ??= []).push({ x: msg.x, z: msg.z, t: world.time });
+            }
+          m.mates = (m.mates ?? []).filter((p) => world.time - p.t < 2);
+        }
+        // How risky it is to head for g: back near where we were 2-9 s ago (an enemy may have
+        // radioed that spot in and a shell be on its way) or near a teammate (one shell, two hits).
+        // Without teammates there is nothing to worry about: a lone enemy has nobody to radio.
+        const heat = (g) => {
+          if (!m.hasMates) return 0;
+          let cost = 0;
+          const heading = angleTo(me, g), reach = dist(me, g);
+          for (const t of [1, 2.5, 4]) {
+            const p = pointAt(me, heading, Math.min(reach, t * 2.3));
+            for (const q of m.trail) {
+              const age = world.time + t - q.t;
+              if (age > 2 && age < 9 && dist(p, q) < 4) cost += 1;
+            }
+            for (const q of m.mates) if (dist(p, q) < 6) cost += 3;
+          }
+          return cost;
+        };
+
+        // Movement: circle the target at about 15 units, at full speed. Every half second or so,
+        // maybe reverse, which throws off a straight-line lead fit, unless the other way leads
+        // back over risky ground.
+        const c = world.arena - 2.5, want = 15;
+        const ok = (p) => Math.abs(p.x) < c && Math.abs(p.z) < c && !insideWall(p, world.walls, 1.2);
+        m.side ??= 1;
+        if (est) {
+          const enemy = ahead(est, 0), toMe = angleTo(enemy, me);
+          const R = Math.max(6, Math.min(want + 5, (dist(me, enemy) + want) / 2));
+          const orbit = (side) => pointAt(enemy, toMe + side * 0.7, R);
+          if (world.time > (m.nextJink ?? 0)) {
+            m.nextJink = world.time + 0.4 + Math.random() * 0.8;
+            const here = heat(orbit(m.side)), there = heat(orbit(-m.side));
+            if (Math.random() < 0.4 ? there <= here + 2 : there + 2 < here) m.side = -m.side;
+          }
+          if (!ok(orbit(m.side))) m.side = -m.side;
+          const goal = orbit(m.side);
+          m.goal = ok(goal) ? goal : (m.goal && ok(m.goal) && dist(me, m.goal) > 1 ? m.goal : randomOpenPoint(world, 3));
+        } else if (!m.goal || dist(me, m.goal) < 1.5 || (me.blocked && !m.wasBlocked) || heat(m.goal) > 4) {
+          // Nothing on radar: head for a radio tip (stopping short of it) or roam, avoiding risky ground.
+          const tip = radioEnemyTip(world);
+          const options = [tip && pointAt(tip, angleTo(tip, me), want), ...Array.from({ length: 5 }, () => randomOpenPoint(world, 3))];
+          let best = Infinity;
+          for (const g of options) if (g && ok(g) && heat(g) < best) { best = heat(g); m.goal = g; }
+        }
+        m.wasBlocked = me.blocked;
+
+        return { moveTo: m.goal, speed: 1.3, aim, fire, ...howitzerCmd };
+      },
+    },
   };
 
   global.Strategies = STRATEGIES;
