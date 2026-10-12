@@ -98,11 +98,17 @@
   }
 
   // Return { fireHowitzer: tip } if the howitzer is ready and can reach the latest radio tip, else {}.
+  // Tips only survive one frame in the inbox, so we cache the most recent one for up to 6 s
+  // (just over one 5 s reload cycle) so the howitzer can still fire when it becomes ready.
   function howitzerAtTip(me, world) {
+    const freshTip = radioEnemyTip(world);
+    if (freshTip) { me.mem.lastEnemyTip = freshTip; me.mem.lastEnemyTipTime = world.time; }
+    if (world.time - (me.mem.lastEnemyTipTime ?? -99) > 6) me.mem.lastEnemyTip = null;
     if (!world.howitzer.ready) return {};
-    const tip = radioEnemyTip(world);
+    const tip = me.mem.lastEnemyTip;
     if (!tip) return {};
     if (!world.howitzer.canReach(tip.x, tip.z)) return {};
+    me.mem.lastEnemyTip = null; // consumed — don't fire at the same spot twice
     return { fireHowitzer: tip };
   }
 
