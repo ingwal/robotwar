@@ -524,7 +524,7 @@ function detonate(mine) {
     if (r.dying !== null || Math.hypot(r.x - mine.x, r.z - mine.z) > MINE_BLAST) continue;
     r.hit = 1;
     r.hp = Math.max(0, r.hp - mine.damage);
-    if (r.hp === 0) r.dying = 0;
+    if (r.hp === 0) { r.dying = 0; sendDeathNotice(r); }
   }
   for (const w of WALLS.slice()) {
     const cx = clamp(mine.x, w.x0, w.x1), cz = clamp(mine.z, w.z0, w.z1);
@@ -690,7 +690,7 @@ function landHowitzer(b) {
     if (Math.hypot(r.x - b.x, r.z - b.z) < HOWITZER_BLAST) {
       r.hit = 1; playMissileHit();
       r.hp -= 1;
-      if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
+      if (r.hp <= 0) { r.hp = 0; r.dying = 0; sendDeathNotice(r); }
     }
   }
   for (const w of WALLS.slice()) {
@@ -786,6 +786,12 @@ function deliverRadio() {
     r.radioInbox = msgs.filter((m) => m._from !== r.robotIndex);
   }
   teamRadio.clear();
+}
+
+function sendDeathNotice(r) {
+  if (!config.radioEnabled) return;
+  if (!teamRadio.has(r.teamId)) teamRadio.set(r.teamId, []);
+  teamRadio.get(r.teamId).push({ type: 'death', teamId: r.teamId, x: r.x, z: r.z, _from: r.robotIndex });
 }
 
 function think(r) {
@@ -921,7 +927,7 @@ function update(dt) {
           r.hit = 1;
           playMissileHit();
           r.hp -= 1;
-          if (r.hp <= 0) { r.hp = 0; r.dying = 0; }
+          if (r.hp <= 0) { r.hp = 0; r.dying = 0; sendDeathNotice(r); }
           r.x += b.vx * 0.02; r.z += b.vz * 0.02;
           dead = true;
         }
