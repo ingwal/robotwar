@@ -56,6 +56,21 @@
   .eyeslot-bar button:hover { opacity: 1; }
   .eyeslot-port { height: 160px; border-radius: 0 0 8px 8px; flex-shrink: 0;
                   box-shadow: 0 6px 24px rgba(0,0,0,0.4), inset 0 0 0 1.5px rgba(255,255,255,0.2); }
+  #results { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 20px 22px; z-index: 20; }
+  #results[hidden] { display: none; }
+  #results h2 { margin: 0 0 16px; font-size: 20px; }
+  .result-row { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+                border-bottom: 1px solid #e0e5ef; }
+  .result-row:last-child { border-bottom: none; }
+  .result-place { font-size: 13px; font-weight: 700; width: 28px; text-align: right;
+                  color: #888; flex-shrink: 0; }
+  .result-place.gold   { color: #b8860b; }
+  .result-place.silver { color: #888; }
+  .result-place.bronze { color: #a0522d; }
+  .result-name { flex: 1; font-weight: 600; font-size: 14px; }
+  .result-stat { font-size: 13px; color: #5a6478; white-space: nowrap; }
+  .result-stat.elim { color: #c04040; }
 </style>
 </head>
 <body>
@@ -64,6 +79,11 @@
 <div id="msg"></div>
 <div id="board" class="panel"></div>
 <div id="eyepanel"></div>
+<div id="results" class="panel" hidden>
+  <h2 id="results-title">Battle Results</h2>
+  <div id="results-table"></div>
+  <div class="buttons"><button id="results-ok" class="primary">New Battle</button></div>
+</div>
 <div id="setup" class="panel">
   <h2>Robot War</h2>
   <div class="config-section">
@@ -400,7 +420,9 @@ applySaved(configFromQuery(location.search));
 
 let phase = 'setup';
 let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], radioPulses = [], roundOverTimer = 0, battleTime = 0;
+let battleEntrants = []; // snapshot of participating teams recorded at round start
 const teamRadio = new Map();
+const ordinal = (n) => n + (['th','st','nd','rd'][((n % 100) - 20) % 10] ?? ['th','st','nd','rd'][n % 100] ?? 'th');
 const msg = document.getElementById('msg');
 
 function newRound(cfg) {
@@ -457,6 +479,18 @@ function newRound(cfg) {
   mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
   battleTime = 0;
   msg.textContent = '';
+  // Snapshot teams for the end-of-battle results screen.
+  const seenTeams = new Set();
+  battleEntrants = [];
+  for (const r of robots) {
+    if (!seenTeams.has(r.teamId)) {
+      seenTeams.add(r.teamId);
+      const teamRobots = robots.filter((x) => x.teamId === r.teamId);
+      const displayName = cfg.teamsMode ? TEAMS[r.teamId % TEAMS.length].name : r.name;
+      battleEntrants.push({ teamId: r.teamId, name: displayName, color: r.color,
+        strategy: r.strategy, startCount: teamRobots.length });
+    }
+  }
   buildBoard();
 }
 
@@ -909,6 +943,7 @@ function update(dt) {
     endRound(winner, "Time's up! ");
   }
   if (phase === 'over' && (roundOverTimer -= dt) <= 0) {
+    document.getElementById('results').hidden = true;
     newRound();
     showSetup();
   }
@@ -917,17 +952,62 @@ function update(dt) {
 
 function endRound(winnerTeamId, prefix) {
   phase = 'over';
-  roundOverTimer = 3;
-  if (winnerTeamId == null) {
-    msg.textContent = prefix + 'Draw!';
-  } else if (config.teamsMode) {
-    const team = TEAMS[winnerTeamId % TEAMS.length];
-    msg.textContent = prefix + `${team.name} team wins!`;
-  } else {
-    const r = robots.find((r) => r.teamId === winnerTeamId)
-      ?? { name: TEAMS[winnerTeamId % TEAMS.length].name, strategy: STRATEGY_KEYS[0] };
-    msg.textContent = prefix + `${r.name} the ${Strategies[r.strategy].name} wins!`;
+  roundOverTimer = 60; // long fallback; "New Battle" button fires immediately
+  showResults(winnerTeamId, prefix);
+}
+
+function showResults(winnerTeamId, prefix) {
+  // Tally living robots and HP per team.
+  const live = {};
+  for (const r of robots) {
+    if (r.dying === null) {
+      live[r.teamId] ??= { count: 0, hp: 0 };
+      live[r.teamId].count++;
+      live[r.teamId].hp += r.hp;
+    }
   }
+
+  // Build sorted result rows: surviving teams by HP desc, then eliminated.
+  const rows = battleEntrants.map((e) => ({
+    ...e,
+    alive: live[e.teamId]?.count ?? 0,
+    hp:    live[e.teamId]?.hp    ?? 0,
+  }));
+  rows.sort((a, b) => (b.alive > 0) - (a.alive > 0) || b.hp - a.hp);
+
+  // Title.
+  const titleEl = document.getElementById('results-title');
+  if (winnerTeamId == null) {
+    titleEl.textContent = prefix + 'Draw!';
+  } else if (config.teamsMode) {
+    titleEl.textContent = prefix + TEAMS[winnerTeamId % TEAMS.length].name + ' team wins!';
+  } else {
+    const winner = rows.find((e) => e.teamId === winnerTeamId);
+    const stratName = winner ? Strategies[winner.strategy]?.name : '';
+    titleEl.textContent = prefix + (winner?.name ?? '') + (stratName ? ` the ${stratName}` : '') + ' wins!';
+  }
+
+  // Rows.
+  const table = document.getElementById('results-table');
+  table.innerHTML = '';
+  rows.forEach((e, i) => {
+    const placeClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+    const stratSuffix = !config.teamsMode && e.strategy ? ` <small style="font-weight:400;color:#888">${Strategies[e.strategy]?.name ?? ''}</small>` : '';
+    const statText = e.alive > 0
+      ? `${e.alive} robot${e.alive > 1 ? 's' : ''}, ${e.hp} HP`
+      : 'Eliminated';
+    const statClass = e.alive > 0 ? '' : 'elim';
+    const row = document.createElement('div');
+    row.className = 'result-row';
+    row.innerHTML =
+      `<span class="result-place ${placeClass}">${ordinal(i + 1)}</span>` +
+      `<span class="dot" style="background:${css(e.color)}"></span>` +
+      `<span class="result-name">${e.name}${stratSuffix}</span>` +
+      `<span class="result-stat ${statClass}">${statText}</span>`;
+    table.append(row);
+  });
+
+  document.getElementById('results').hidden = false;
 }
 
 // ---------- setup screen and scoreboard ----------
@@ -1115,6 +1195,13 @@ const saveConfig = () => {
 };
 saveConfig(); // show the starting setup in the address straight away
 for (const type of ['input', 'change', 'click']) setup.addEventListener(type, saveConfig);
+
+document.getElementById('results-ok').addEventListener('click', () => {
+  document.getElementById('results').hidden = true;
+  roundOverTimer = 0;
+  newRound();
+  showSetup();
+});
 
 document.getElementById('fight').addEventListener('click', () => {
   saveConfig();
@@ -1330,7 +1417,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 addEventListener('keydown', (e) => {
   if (e.target.closest('select, button, input')) return;
-  if (e.code === 'Escape' && phase !== 'setup' && confirm('Stop the current battle?')) { paused = false; showSetup(); }
+  if (e.code === 'Escape' && phase !== 'setup' && confirm('Stop the current battle?')) { paused = false; document.getElementById('results').hidden = true; showSetup(); }
   if (e.code === 'Space') paused = !paused;
   if (e.code === 'KeyM') muted = !muted;
 });
