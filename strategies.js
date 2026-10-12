@@ -294,12 +294,13 @@
         if (crowded.length > 0) {
           const avg = { x: crowded.reduce((s, p) => s + p.x, 0) / crowded.length,
                         z: crowded.reduce((s, p) => s + p.z, 0) / crowded.length };
-          let best = randomOpenPoint(world);
-          for (let i = 0; i < 12; i++) {
-            const p = randomOpenPoint(world);
-            if (dist(p, avg) > dist(best, avg)) best = p;
-          }
-          m.goal = best;
+          // Each robot flees radially outward from the centroid through its own position,
+          // so the team fans out rather than converging on the same far corner.
+          const fleeAngle = angleTo(avg, me);
+          const raw = pointAt(me, fleeAngle, MIN_TEAM_DIST * 2);
+          const edge = world.arena - 2;
+          m.goal = { x: Math.max(-edge, Math.min(edge, raw.x)),
+                     z: Math.max(-edge, Math.min(edge, raw.z)) };
         }
 
         // When no enemy visible, bombard corners in rotation.
