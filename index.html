@@ -421,6 +421,7 @@ applySaved(configFromQuery(location.search));
 let phase = 'setup';
 let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], radioPulses = [], roundOverTimer = 0, battleTime = 0;
 let battleEntrants = []; // snapshot of participating teams recorded at round start
+let teamEliminatedAt = {}; // battleTime when each team lost its last robot
 const teamRadio = new Map();
 const ordinal = (n) => n + (['th','st','nd','rd'][((n % 100) - 20) % 10] ?? ['th','st','nd','rd'][n % 100] ?? 'th');
 const msg = document.getElementById('msg');
@@ -478,6 +479,7 @@ function newRound(cfg) {
   for (const r of robots) Object.assign(r, nearestFreePoint(r)); // don't start inside a building
   mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
   battleTime = 0;
+  teamEliminatedAt = {};
   msg.textContent = '';
   // Snapshot teams for the end-of-battle results screen.
   const seenTeams = new Set();
@@ -789,6 +791,10 @@ function deliverRadio() {
 }
 
 function sendDeathNotice(r) {
+  // Record elimination time if this was the team's last living robot.
+  const teamStillAlive = robots.some((x) => x !== r && x.teamId === r.teamId && x.dying === null);
+  if (!teamStillAlive) teamEliminatedAt[r.teamId] = battleTime;
+
   if (!config.radioEnabled) return;
   const allTeamIds = new Set(robots.map((x) => x.teamId));
   for (const teamId of allTeamIds) {
@@ -983,7 +989,11 @@ function showResults(winnerTeamId, prefix) {
     alive: live[e.teamId]?.count ?? 0,
     hp:    live[e.teamId]?.hp    ?? 0,
   }));
-  rows.sort((a, b) => (b.alive > 0) - (a.alive > 0) || b.hp - a.hp);
+  rows.sort((a, b) => {
+    if (a.alive > 0 !== b.alive > 0) return (b.alive > 0) - (a.alive > 0); // alive before eliminated
+    if (a.alive > 0) return b.hp - a.hp;                                     // alive: more HP = higher place
+    return (teamEliminatedAt[b.teamId] ?? 0) - (teamEliminatedAt[a.teamId] ?? 0); // eliminated: later = higher place
+  });
 
   // Title.
   const titleEl = document.getElementById('results-title');
