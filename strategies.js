@@ -267,7 +267,7 @@
 
     ingwa: {
       name: 'Ingwa',
-      description: 'Hunts like Hunter with lead aiming. Disperses from teammates, bombards corners when idle, and scoots after spotting an enemy whose team still has backup — tracked via global death messages.',
+      description: "Ingwa's secret bot strategy.",
       think(me, world) {
         const m = me.mem;
         const c = world.arena - 1.2;
