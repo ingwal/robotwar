@@ -284,7 +284,7 @@
         m.wasBlocked = me.blocked;
 
         // Disperse from nearby teammates using position broadcasts.
-        const MIN_TEAM_DIST = 8;
+        const MIN_TEAM_DIST = 12;
         if (world.radio) {
           for (const msg of world.radio.inbox)
             if (msg.type === 'position') (m.teamPos ??= []).push({ x: msg.x, z: msg.z, t: world.time });
