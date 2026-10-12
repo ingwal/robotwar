@@ -365,13 +365,20 @@
           fire = true;
         }
 
-        // When no enemy visible: prioritise a teammate's radio tip, then fall back
+        // Cache the latest radio enemy tip — it's only in the inbox for one frame,
+        // but the howitzer takes 5 s to reload, so we must hold it across frames.
+        const freshTip = radioEnemyTip(world);
+        if (freshTip) { m.lastEnemyTip = freshTip; m.lastEnemyTipTime = world.time; }
+        if (world.time - (m.lastEnemyTipTime ?? -99) > 6) m.lastEnemyTip = null;
+
+        // When no enemy visible: prioritise the cached radio tip, then fall back
         // to corner bombardment (cycling past any corner out of range).
         let howitzerCmd = {};
         if (!seen && world.howitzer.ready) {
-          const tip = radioEnemyTip(world);
+          const tip = m.lastEnemyTip;
           if (tip && world.howitzer.canReach(tip.x, tip.z)) {
             howitzerCmd = { fireHowitzer: tip };
+            m.lastEnemyTip = null; // don't fire at the same spot twice
           } else {
             for (let i = 0; i < 4; i++) {
               const target = corners[m.cornerIdx];
