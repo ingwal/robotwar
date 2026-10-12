@@ -29,8 +29,11 @@
 //              radio      team radio, or null if disabled:
 //                           radio.inbox  messages from teammates since last tick: [{ type, ...data }]
 //                           radio.send({ type, ...data })  broadcast to all living teammates
-//                         message type used by built-in strategies:
-//                           { type: 'enemy', x, z }  enemy spotted at world position x, z
+//                         message types used by built-in strategies:
+//                           { type: 'enemy', x, z }          enemy spotted at world position x, z
+//                           { type: 'position', x, z }       own position broadcast (every ~2 s)
+//                         global message sent to all robots by the game engine:
+//                           { type: 'death', teamId, x, z }  a robot died (teamId identifies the team)
 //              howitzer   { ready, maxRange, canReach(x,z) } — howitzer weapon info;
 //                           canReach returns true if the position is within firing range
 //   moveTo   {x, z} to drive to, or null to stand still
@@ -258,7 +261,7 @@
 
     ingwa: {
       name: 'Ingwa',
-      description: 'Hunts and circles enemies like Hunter, and lobs howitzer shells into arena corners in rotation when no enemy is in sight.',
+      description: 'Hunts like Hunter with lead aiming. Disperses from teammates, bombards corners when idle, and scoots away after spotting an enemy with backup — knowing they may howitzer the contact point.',
       think(me, world) {
         const m = me.mem;
         const c = world.arena - 1.2;
@@ -268,6 +271,30 @@
         const seen = radarTrack(me, world);
         broadcastEnemy(me, world, seen);
         broadcastPosition(me, world);
+
+        // Track own team deaths to know how many teammates remain.
+        if (world.radio) {
+          for (const msg of world.radio.inbox)
+            if (msg.type === 'death' && msg.teamId === me.teamId)
+              m.teamDeaths = (m.teamDeaths ?? 0) + 1;
+        }
+
+        // Estimate enemy numbers from distinct radar contacts and radio tips.
+        m.enemySightings ??= [];
+        if (seen) {
+          const ep = pointAt(me, seen.angle, seen.dist);
+          if (!m.enemySightings.some(s => dist(s, ep) < 6 && world.time - s.t < 6))
+            m.enemySightings.push({ x: ep.x, z: ep.z, t: world.time });
+        }
+        if (world.radio) {
+          for (const msg of world.radio.inbox)
+            if (msg.type === 'enemy' && !m.enemySightings.some(s => dist(s, msg) < 6 && world.time - s.t < 6))
+              m.enemySightings.push({ x: msg.x, z: msg.z, t: world.time });
+        }
+        m.enemySightings = m.enemySightings.filter(s => world.time - s.t < 8);
+        const likelyEnemyCount = m.enemySightings.length;
+
+        // Hunter movement: circle prey when locked, chase radio tips when idle.
         if (seen && !me.blocked) {
           const prey = pointAt(me, seen.angle, seen.dist);
           const around = angleTo(prey, me) + 0.5;
@@ -294,13 +321,27 @@
         if (crowded.length > 0) {
           const avg = { x: crowded.reduce((s, p) => s + p.x, 0) / crowded.length,
                         z: crowded.reduce((s, p) => s + p.z, 0) / crowded.length };
-          // Each robot flees radially outward from the centroid through its own position,
-          // so the team fans out rather than converging on the same far corner.
           const fleeAngle = angleTo(avg, me);
           const raw = pointAt(me, fleeAngle, MIN_TEAM_DIST * 2);
           const edge = world.arena - 2;
           m.goal = { x: Math.max(-edge, Math.min(edge, raw.x)),
                      z: Math.max(-edge, Math.min(edge, raw.z)) };
+        }
+
+        // Scoot after spotting an enemy with backup: they may howitzer our current position.
+        let scooting = false;
+        if (seen && likelyEnemyCount >= 2) {
+          if (!m.scootGoal || dist(me, m.scootGoal) < 2) {
+            const awayAngle = seen.angle + Math.PI + (Math.random() - 0.5) * Math.PI;
+            const raw = pointAt(me, awayAngle, 15);
+            const edge = world.arena - 2;
+            m.scootGoal = { x: Math.max(-edge, Math.min(edge, raw.x)),
+                            z: Math.max(-edge, Math.min(edge, raw.z)) };
+          }
+          m.goal = m.scootGoal;
+          scooting = true;
+        } else {
+          m.scootGoal = null;
         }
 
         // Lead aiming: accumulate radar fixes and predict where the target will be.
@@ -333,7 +374,7 @@
         }
 
         // When no enemy visible, bombard corners in rotation.
-        // Cycle past any corner that is currently out of howitzer range.
+        // Cycle past any corner currently out of howitzer range.
         let howitzerCmd = {};
         if (!seen && world.howitzer.ready) {
           for (let i = 0; i < 4; i++) {
@@ -346,7 +387,7 @@
           }
         }
 
-        return { moveTo: m.goal, speed: 1.1, aim, fire, ...howitzerCmd };
+        return { moveTo: m.goal, speed: scooting ? 1.3 : 1.1, aim, fire, ...howitzerCmd };
       },
     },
 

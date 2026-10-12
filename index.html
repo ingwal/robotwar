@@ -790,8 +790,12 @@ function deliverRadio() {
 
 function sendDeathNotice(r) {
   if (!config.radioEnabled) return;
-  if (!teamRadio.has(r.teamId)) teamRadio.set(r.teamId, []);
-  teamRadio.get(r.teamId).push({ type: 'death', teamId: r.teamId, x: r.x, z: r.z, _from: r.robotIndex });
+  const allTeamIds = new Set(robots.map((x) => x.teamId));
+  for (const teamId of allTeamIds) {
+    if (!teamRadio.has(teamId)) teamRadio.set(teamId, []);
+    // _from: -1 is a sentinel that no living robot's robotIndex can match, so nobody filters it out.
+    teamRadio.get(teamId).push({ type: 'death', teamId: r.teamId, x: r.x, z: r.z, _from: -1 });
+  }
 }
 
 function think(r) {
