@@ -365,16 +365,21 @@
           fire = true;
         }
 
-        // When no enemy visible, bombard corners in rotation.
-        // Cycle past any corner currently out of howitzer range.
+        // When no enemy visible: prioritise a teammate's radio tip, then fall back
+        // to corner bombardment (cycling past any corner out of range).
         let howitzerCmd = {};
         if (!seen && world.howitzer.ready) {
-          for (let i = 0; i < 4; i++) {
-            const target = corners[m.cornerIdx];
-            m.cornerIdx = (m.cornerIdx + 1) % 4;
-            if (world.howitzer.canReach(target.x, target.z)) {
-              howitzerCmd = { fireHowitzer: target };
-              break;
+          const tip = radioEnemyTip(world);
+          if (tip && world.howitzer.canReach(tip.x, tip.z)) {
+            howitzerCmd = { fireHowitzer: tip };
+          } else {
+            for (let i = 0; i < 4; i++) {
+              const target = corners[m.cornerIdx];
+              m.cornerIdx = (m.cornerIdx + 1) % 4;
+              if (world.howitzer.canReach(target.x, target.z)) {
+                howitzerCmd = { fireHowitzer: target };
+                break;
+              }
             }
           }
         }
