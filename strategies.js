@@ -333,12 +333,16 @@
         }
 
         // When no enemy visible, bombard corners in rotation.
+        // Cycle past any corner that is currently out of howitzer range.
         let howitzerCmd = {};
-        if (!seen) {
-          const target = corners[m.cornerIdx];
-          if (world.howitzer.ready && world.howitzer.canReach(target.x, target.z)) {
-            howitzerCmd = { fireHowitzer: target };
+        if (!seen && world.howitzer.ready) {
+          for (let i = 0; i < 4; i++) {
+            const target = corners[m.cornerIdx];
             m.cornerIdx = (m.cornerIdx + 1) % 4;
+            if (world.howitzer.canReach(target.x, target.z)) {
+              howitzerCmd = { fireHowitzer: target };
+              break;
+            }
           }
         }
 
