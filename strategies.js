@@ -283,6 +283,25 @@
         }
         m.wasBlocked = me.blocked;
 
+        // Disperse from nearby teammates using position broadcasts.
+        const MIN_TEAM_DIST = 8;
+        if (world.radio) {
+          for (const msg of world.radio.inbox)
+            if (msg.type === 'position') (m.teamPos ??= []).push({ x: msg.x, z: msg.z, t: world.time });
+          m.teamPos = (m.teamPos ?? []).filter(p => world.time - p.t < 3);
+        }
+        const crowded = (m.teamPos ?? []).filter(p => dist(me, p) < MIN_TEAM_DIST);
+        if (crowded.length > 0) {
+          const avg = { x: crowded.reduce((s, p) => s + p.x, 0) / crowded.length,
+                        z: crowded.reduce((s, p) => s + p.z, 0) / crowded.length };
+          let best = randomOpenPoint(world);
+          for (let i = 0; i < 12; i++) {
+            const p = randomOpenPoint(world);
+            if (dist(p, avg) > dist(best, avg)) best = p;
+          }
+          m.goal = best;
+        }
+
         // When no enemy visible, bombard corners in rotation.
         let howitzerCmd = {};
         if (!seen) {
