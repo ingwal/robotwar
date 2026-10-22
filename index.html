@@ -1262,24 +1262,31 @@ document.getElementById('rseditor-add').addEventListener('click', () => {
   const nameInput = document.getElementById('rseditor-name');
   const srcInput  = document.getElementById('rseditor-src');
   const errEl     = document.getElementById('rseditor-error');
-  const name   = nameInput.value.trim() || 'Custom';
-  const source = srcInput.value;
-  const { bytecode, error } = RoboScriptCompiler.compile(source);
-  if (error) { errEl.textContent = error; return; }
   errEl.textContent = '';
-  // Pick a unique strategy key derived from the name.
-  const base = 'rs_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot';
-  let key = base, n = 2;
-  while (key in Strategies) key = base + '_' + n++;
-  // Use the first source comment line as the description if present.
-  const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
   try {
+    const name   = nameInput.value.trim() || 'Custom';
+    const source = srcInput.value;
+    if (!source.trim()) { errEl.textContent = 'Paste your RoboScript source first.'; return; }
+    const { bytecode, error } = RoboScriptCompiler.compile(source);
+    if (error) { errEl.textContent = error; return; }
+    // Pick a unique strategy key derived from the name.
+    const base = 'rs_' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot');
+    let key = base, n = 2;
+    while (key in Strategies) key = base + '_' + n++;
+    // Use the first source comment line as the description if present.
+    const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
     RoboScript.register(key, name, desc, bytecode);
-  } catch (e) { errEl.textContent = e.message; return; }
-  STRATEGY_KEYS.push(key);
-  rseditor.hidden = true;
-  buildSlots();
-  buildTeamSlots();
+    STRATEGY_KEYS.push(key);
+    buildSlots();
+    buildTeamSlots();
+    // Show success then close.
+    errEl.style.color = '#2a7';
+    errEl.textContent = `"${name}" added — pick it from a robot dropdown.`;
+    setTimeout(() => { rseditor.hidden = true; errEl.style.color = ''; errEl.textContent = ''; }, 2000);
+  } catch (e) {
+    errEl.textContent = e.message;
+    console.error('RoboScript editor:', e);
+  }
 });
 
 document.getElementById('fight').addEventListener('click', () => {
