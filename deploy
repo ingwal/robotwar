@@ -1,0 +1,7 @@
+set -x
+sudo rsync -a --delete \
+  --exclude='deploy' \
+  --exclude='README.md' \
+  --exclude='Design/' \
+  --exclude='*~' \
+  . /var/www/monsym/robotwar/
