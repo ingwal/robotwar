@@ -71,6 +71,16 @@
   .result-name { flex: 1; font-weight: 600; font-size: 14px; }
   .result-stat { font-size: 13px; color: #5a6478; white-space: nowrap; }
   .result-stat.elim { color: #c04040; }
+  #rseditor { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+              width: min(580px, calc(100vw - 32px)); box-sizing: border-box; padding: 20px 22px; z-index: 30; }
+  #rseditor[hidden] { display: none; }
+  #rseditor h2 { margin: 0 0 14px; font-size: 20px; }
+  #rseditor-name { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+                   padding: 5px 8px; border-radius: 6px; border: 1px solid #b8c2d4; margin-bottom: 10px; }
+  #rseditor-src { width: 100%; box-sizing: border-box; height: 280px;
+                  font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;
+                  padding: 8px; border-radius: 6px; border: 1px solid #b8c2d4; resize: vertical; }
+  #rseditor-error { color: #c04040; font-size: 12px; margin-top: 6px; min-height: 16px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -83,6 +93,17 @@
   <h2 id="results-title">Battle Results</h2>
   <div id="results-table"></div>
   <div class="buttons"><button id="results-ok" class="primary">New Battle</button></div>
+</div>
+<div id="rseditor" class="panel" hidden>
+  <h2>RoboScript Bot</h2>
+  <input id="rseditor-name" type="text" placeholder="Bot name">
+  <textarea id="rseditor-src" spellcheck="false" autocorrect="off" autocapitalize="off"
+            placeholder="-- write your RoboScript here&#10;-- see roboscript.md for the language reference"></textarea>
+  <div id="rseditor-error"></div>
+  <div class="buttons">
+    <button id="rseditor-cancel">Cancel</button>
+    <button id="rseditor-add" class="primary">Add Bot</button>
+  </div>
 </div>
 <div id="setup" class="panel">
   <h2>Robot War</h2>
@@ -147,7 +168,11 @@
     </div>
     <div id="teamSlots"></div>
   </div>
-  <div class="buttons"><button id="shuffle">Shuffle</button><button id="fight" class="primary">Fight!</button></div>
+  <div class="buttons">
+    <button id="rseditor-open" style="margin-right:auto">RoboScript…</button>
+    <button id="shuffle">Shuffle</button>
+    <button id="fight" class="primary">Fight!</button>
+  </div>
 </div>
 <script src="robot.js"></script>
 <script src="strategies.js"></script>
@@ -1223,6 +1248,36 @@ document.getElementById('results-ok').addEventListener('click', () => {
   roundOverTimer = 0;
   newRound();
   showSetup();
+});
+
+// ---- RoboScript bot editor ----
+const rseditor = document.getElementById('rseditor');
+document.getElementById('rseditor-open').addEventListener('click', () => {
+  rseditor.hidden = false;
+});
+document.getElementById('rseditor-cancel').addEventListener('click', () => {
+  rseditor.hidden = true;
+});
+document.getElementById('rseditor-add').addEventListener('click', () => {
+  const nameInput = document.getElementById('rseditor-name');
+  const srcInput  = document.getElementById('rseditor-src');
+  const errEl     = document.getElementById('rseditor-error');
+  const name   = nameInput.value.trim() || 'Custom';
+  const source = srcInput.value;
+  const { bytecode, error } = RoboScriptCompiler.compile(source);
+  if (error) { errEl.textContent = error; return; }
+  errEl.textContent = '';
+  // Pick a unique strategy key derived from the name.
+  const base = 'rs_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot';
+  let key = base, n = 2;
+  while (key in Strategies) key = base + '_' + n++;
+  // Use the first source comment line as the description if present.
+  const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
+  RoboScript.register(key, name, desc, bytecode);
+  STRATEGY_KEYS.push(key);
+  rseditor.hidden = true;
+  buildSlots();
+  buildTeamSlots();
 });
 
 document.getElementById('fight').addEventListener('click', () => {
