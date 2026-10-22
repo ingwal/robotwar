@@ -197,7 +197,7 @@
     const len = bytecode.length;
     for (let i = 0; i < len; i += 2) {
       const w0 = bytecode[i];
-      if (!Number.isFinite(w0) || (w0 | 0) !== w0)
+      if (!Number.isFinite(w0) || (w0 >>> 0) !== w0)
         return `word at index ${i} is not a 32-bit integer`;
       const op  =  w0         & 0xFF;
       const dst = (w0 >>>  8) & 0xFF;
