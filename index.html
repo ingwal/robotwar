@@ -1277,8 +1277,7 @@ document.getElementById('rseditor-add').addEventListener('click', () => {
     const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
     RoboScript.register(key, name, desc, bytecode);
     STRATEGY_KEYS.push(key);
-    buildSlots();
-    buildTeamSlots();
+    showSetup();
     // Show success then close.
     errEl.style.color = '#2a7';
     errEl.textContent = `"${name}" added — pick it from a robot dropdown.`;
