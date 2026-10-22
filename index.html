@@ -95,6 +95,9 @@
   <div id="results-table"></div>
   <div class="buttons"><button id="results-ok" class="primary">New Battle</button></div>
 </div>
+<div id="rstoast" hidden style="position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+     background:#1e2d45;color:#fff;padding:10px 20px;border-radius:10px;
+     font-size:14px;z-index:50;pointer-events:none;white-space:nowrap"></div>
 <div id="rseditor" class="panel" hidden>
   <h2>RoboScript Bot <a href="roboscript-reference.html" target="_blank" style="font-size:13px;font-weight:400;margin-left:10px;vertical-align:middle">Language reference ↗</a></h2>
   <input id="rseditor-name" type="text" placeholder="Bot name">
@@ -102,6 +105,7 @@
             placeholder="-- write your RoboScript here&#10;-- click Language reference ↗ above for docs and examples"></textarea>
   <div id="rseditor-error"></div>
   <div class="buttons">
+    <button id="rseditor-share" style="margin-right:auto">Share link</button>
     <button id="rseditor-cancel">Cancel</button>
     <button id="rseditor-add" class="primary">Add Bot</button>
   </div>
@@ -1259,6 +1263,61 @@ document.getElementById('rseditor-open').addEventListener('click', () => {
 document.getElementById('rseditor-cancel').addEventListener('click', () => {
   rseditor.hidden = true;
 });
+
+// ---- Bytecode binary packing (12 bytes/instruction: 4-byte uint32 word + 8-byte float64 imm) ----
+function bytecodeToBase64(code) {
+  const n = code.length / 2;
+  const buf = new ArrayBuffer(n * 12);
+  const view = new DataView(buf);
+  for (let i = 0; i < n; i++) {
+    view.setUint32(i * 12,      code[i * 2],     true);
+    view.setFloat64(i * 12 + 4, code[i * 2 + 1], true);
+  }
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function base64ToBytecode(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (bytes.length % 12 !== 0) throw new Error('Corrupt bytecode');
+  const view = new DataView(bytes.buffer);
+  const n = bytes.length / 12;
+  const code = [];
+  for (let i = 0; i < n; i++) {
+    code.push(view.getUint32(i * 12, true));
+    code.push(view.getFloat64(i * 12 + 4, true));
+  }
+  return code;
+}
+
+function showToast(msg, ms = 3500) {
+  const t = document.getElementById('rstoast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+// Share link — compiles the bot and encodes BYTECODE (not source) in the URL.
+// The recipient can fight the bot but cannot see the source.
+document.getElementById('rseditor-share').addEventListener('click', () => {
+  const errEl  = document.getElementById('rseditor-error');
+  const name   = document.getElementById('rseditor-name').value.trim() || 'Bot';
+  const source = document.getElementById('rseditor-src').value;
+  if (!source.trim()) { errEl.style.color = ''; errEl.textContent = 'Paste your RoboScript source first.'; return; }
+  const { bytecode, error } = RoboScriptCompiler.compile(source);
+  if (error) { errEl.style.color = ''; errEl.textContent = error; return; }
+  const payload = encodeURIComponent(JSON.stringify({ n: name, b: bytecodeToBase64(bytecode) }));
+  const url = location.origin + location.pathname + location.search + '#rsbot=' + payload;
+  const btn = document.getElementById('rseditor-share');
+  navigator.clipboard.writeText(url).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Share link'; }, 2000);
+  }).catch(() => { prompt('Copy this link:', url); });
+});
 document.getElementById('rseditor-add').addEventListener('click', () => {
   const nameInput = document.getElementById('rseditor-name');
   const srcInput  = document.getElementById('rseditor-src');
@@ -1279,6 +1338,13 @@ document.getElementById('rseditor-add').addEventListener('click', () => {
     RoboScript.register(key, name, desc, bytecode);
     STRATEGY_KEYS.push(key);
     showSetup();
+    // Persist to localStorage so the bot survives page reloads.
+    try {
+      const saved = JSON.parse(localStorage.getItem('robotwar.bots') || '[]');
+      if (!saved.some((b) => b.name === name && b.source === source))
+        saved.push({ name, source });
+      localStorage.setItem('robotwar.bots', JSON.stringify(saved));
+    } catch {}
     // Show success then close.
     errEl.style.color = '#2a7';
     errEl.textContent = `"${name}" added — pick it from a robot dropdown.`;
@@ -1394,8 +1460,62 @@ function updateBoard() {
   }
 }
 
+// ---- Restore saved bots from localStorage ----
+function restoreLocalBots() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem('robotwar.bots') || '[]'); } catch { return; }
+  for (const { name, source } of saved) {
+    try {
+      const { bytecode, error } = RoboScriptCompiler.compile(source);
+      if (error || !bytecode) continue;
+      const base = 'rs_' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot');
+      let key = base, n = 2;
+      while (key in Strategies) key = base + '_' + n++;
+      const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
+      RoboScript.register(key, name, desc, bytecode);
+      STRATEGY_KEYS.push(key);
+    } catch {}
+  }
+}
+
+// ---- Load a bot shared via URL fragment (#rsbot=...) ----
+// Bytecode links ({n, b}): auto-register silently — source is never shown.
+// Source links ({n, s}): open editor pre-filled (for collaborative sharing).
+function checkUrlBot() {
+  const m = location.hash.match(/^#rsbot=(.+)/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const data = JSON.parse(decodeURIComponent(m[1]));
+    const name = data.n || 'Shared Bot';
+    if (data.b) {
+      // Bytecode-only link: register directly, no source visible.
+      const bytecode = base64ToBytecode(data.b);
+      const base = 'rs_' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot');
+      let key = base, n = 2;
+      while (key in Strategies) key = base + '_' + n++;
+      RoboScript.register(key, name, 'Shared RoboScript bot', bytecode);
+      STRATEGY_KEYS.push(key);
+      showSetup();
+      showToast(`Bot "${name}" added from shared link.`);
+    } else if (data.s) {
+      // Source link: open editor pre-filled (collaborative / development use).
+      document.getElementById('rseditor-name').value = name;
+      document.getElementById('rseditor-src').value  = data.s;
+      const errEl = document.getElementById('rseditor-error');
+      errEl.style.color = '#2a7';
+      errEl.textContent = 'Shared bot loaded — review the code then click Add Bot.';
+      rseditor.hidden = false;
+    }
+  } catch (e) {
+    showToast('Could not load shared bot: ' + e.message);
+  }
+}
+
 newRound();
+restoreLocalBots();
 showSetup();
+checkUrlBot();
 
 // ---------- camera ----------
 let yaw = 0.5, pitch = 0.85, dist = 40, paused = false;
