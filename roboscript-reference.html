@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoboScript Reference</title>
+<link rel="icon" href="favicon.ico">
+<style>
+  :root {
+    --bg:    #edf0f6;
+    --panel: #fff;
+    --navy:  #1e2d45;
+    --blue:  #2a4a80;
+    --text:  #1e2d45;
+    --muted: #5a6a80;
+    --hl:    #f0f5ff;
+    --border:#c8d2e0;
+    --orange:#e07020;
+    --green: #1a7a44;
+    --code-bg:#f4f6fb;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.65 system-ui, sans-serif;
+  }
+  a { color: var(--blue); }
+
+  /* ---- Layout ---- */
+  header {
+    background: var(--navy);
+    color: #fff;
+    padding: 18px 32px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .02em; }
+  header span { opacity: .6; font-size: 13px; }
+  nav {
+    background: var(--navy);
+    border-top: 1px solid rgba(255,255,255,.1);
+    padding: 0 24px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+  }
+  nav a {
+    display: inline-block;
+    color: rgba(255,255,255,.75);
+    text-decoration: none;
+    padding: 8px 10px;
+    font-size: 13px;
+    transition: color .15s;
+  }
+  nav a:hover { color: #fff; }
+
+  main {
+    max-width: 860px;
+    margin: 32px auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ---- Sections ---- */
+  section { margin-bottom: 48px; }
+  h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    color: var(--blue);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 6px;
+  }
+  h3 { margin: 24px 0 8px; font-size: 15px; color: var(--navy); }
+  p  { margin: 0 0 12px; }
+
+  /* ---- Tables ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px; }
+  th    { background: var(--navy); color: #fff; text-align: left; padding: 7px 10px; font-size: 13px; }
+  td    { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: var(--hl); }
+  td:first-child { font-family: 'Courier New', monospace; font-size: 13px; white-space: nowrap; }
+  td .note { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ---- Code ---- */
+  pre  {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0 0 16px;
+  }
+  code { font-family: 'Courier New', monospace; }
+  pre code { font-size: inherit; }
+  p code, li code, td code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 13px;
+  }
+
+  /* ---- Callouts ---- */
+  .tip, .warn {
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 14px;
+  }
+  .tip  { background: #e8f5ee; border-left: 4px solid var(--green); }
+  .warn { background: #fff4e5; border-left: 4px solid var(--orange); }
+  .tip  strong { color: var(--green); }
+  .warn strong { color: var(--orange); }
+
+  /* ---- Operator table ---- */
+  .ops { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .ops code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 9px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RoboScript</h1>
+  <span>Language Reference &amp; Tutorial — Robot War</span>
+</header>
+<nav>
+  <a href="#model">Execution model</a>
+  <a href="#variables">Variables</a>
+  <a href="#operators">Operators</a>
+  <a href="#control">Control flow</a>
+  <a href="#sensors">Sensors</a>
+  <a href="#outputs">Outputs</a>
+  <a href="#functions">Functions</a>
+  <a href="#memory">Persistent memory</a>
+  <a href="#tutorial">Tutorial</a>
+  <a href="#examples">Examples</a>
+</nav>
+
+<main>
+
+<!-- ===== Execution model ===== -->
+<section id="model">
+<h2>Execution model</h2>
+<p>
+  RoboScript runs <strong>once per frame</strong> — about 60 times per second.
+  Each frame the interpreter loads fresh sensor values, executes your code from
+  the top, and applies any outputs you wrote before returning control to the game.
+</p>
+<ul>
+  <li>Regular variables are <strong>reset to 0</strong> at the start of every frame.</li>
+  <li><code>mem[0]</code>…<code>mem[63]</code> <strong>persist</strong> across frames — use them for state.</li>
+  <li>You have a budget of <strong>4 000 instructions per frame</strong>. If your code
+      takes longer, execution is cut off and the last written outputs are used.</li>
+  <li>All values are <strong>floating-point numbers</strong>. There are no strings, booleans,
+      or arrays. The number <code>0.0</code> is false; anything else is true.</li>
+</ul>
+<div class="tip"><strong>Tip:</strong> Think of your script like a <em>control loop body</em>, not a complete program.
+It runs repeatedly, so avoid trying to wait or loop for multiple frames — instead
+store state in <code>mem[]</code> and let the frame cycle do the looping.</div>
+</section>
+
+<!-- ===== Variables ===== -->
+<section id="variables">
+<h2>Variables</h2>
+<p>Declare a variable by assigning it. All variables are floats.</p>
+<pre><code>speed = 1.0
+angle = me.turret + 0.1
+count = count + 1   -- note: count resets to 0 each frame! use mem[] for counters
+</code></pre>
+<p>Variable names are case-sensitive, start with a letter or <code>_</code>, and may contain letters, digits, and underscores.</p>
+<div class="warn"><strong>Remember:</strong> plain variables reset to 0 each frame. Only <code>mem[0]</code>…<code>mem[63]</code> remember their values from one frame to the next.</div>
+</section>
+
+<!-- ===== Operators ===== -->
+<section id="operators">
+<h2>Operators</h2>
+<h3>Arithmetic</h3>
+<div class="ops">
+  <code>+</code><code>-</code><code>*</code><code>/</code><code>%</code><code>^</code><code>-x (unary)</code>
+</div>
+<p><code>^</code> is exponentiation. Division by zero returns 0. Modulo by zero returns 0.</p>
+
+<h3>Comparison — return 1 (true) or 0 (false)</h3>
+<div class="ops">
+  <code>==</code><code>!=</code><code>&lt;</code><code>&lt;=</code><code>&gt;</code><code>&gt;=</code>
+</div>
+
+<h3>Logical</h3>
+<div class="ops">
+  <code>and</code><code>or</code><code>not</code>
+</div>
+<p>Treat 0 as false and any other number as true.</p>
+
+<h3>Precedence (high → low)</h3>
+<table>
+  <tr><th>Level</th><th>Operators</th></tr>
+  <tr><td>Highest</td><td><code>^</code> (right-associative)</td></tr>
+  <tr><td></td><td>unary <code>-</code></td></tr>
+  <tr><td></td><td><code>*  /  %</code></td></tr>
+  <tr><td></td><td><code>+  -</code></td></tr>
+  <tr><td></td><td><code>==  !=  &lt;  &lt;=  &gt;  &gt;=</code></td></tr>
+  <tr><td></td><td><code>not</code></td></tr>
+  <tr><td></td><td><code>and</code></td></tr>
+  <tr><td>Lowest</td><td><code>or</code></td></tr>
+</table>
+<p>Use parentheses to override: <code>(a + b) * c</code>.</p>
+</section>
+
+<!-- ===== Control flow ===== -->
+<section id="control">
+<h2>Control flow</h2>
+
+<h3>if / elseif / else / end</h3>
+<pre><code>if hp &lt; 20 then
+  -- flee
+elseif hp &lt; 60 then
+  -- be cautious
+else
+  -- attack
+end
+</code></pre>
+
+<h3>while / do / end</h3>
+<pre><code>while angle &lt; 6.28 do
+  angle = angle + 0.1
+  d = scan(angle, 0.1)
+  if d &gt; 0 then break end
+end
+</code></pre>
+<div class="warn"><strong>Watch the budget!</strong> A tight <code>while</code> loop can exhaust the 4 000-instruction
+budget. Prefer using <code>mem[]</code> to continue work across frames.</div>
+
+<h3>loop / end — infinite loop with break</h3>
+<pre><code>loop
+  angle = angle + 0.1
+  d = scan(angle, 0.12)
+  if d != 0 then break end
+  if angle &gt; 6.28 then break end
+end
+</code></pre>
+
+<h3>break and continue</h3>
+<p><code>break</code> exits the nearest enclosing loop. <code>continue</code> jumps to the top of the nearest loop.</p>
+</section>
+
+<!-- ===== Sensors ===== -->
+<section id="sensors">
+<h2>Sensors (read-only)</h2>
+<p>These values are refreshed at the start of every frame.</p>
+
+<h3>Robot state</h3>
+<table>
+  <tr><th>Name</th><th>Description</th></tr>
+  <tr><td>me.x</td><td>X position. The arena spans −<em>arena</em> to +<em>arena</em>.</td></tr>
+  <tr><td>me.z</td><td>Z position.</td></tr>
+  <tr><td>me.heading</td><td>Current movement direction, radians. 0 = +Z, π/2 = +X.</td></tr>
+  <tr><td>me.turret</td><td>Current turret angle, same convention.</td></tr>
+  <tr><td>me.hp</td><td>Current hit points.</td></tr>
+  <tr><td>me.maxHp</td><td>Maximum hit points.</td></tr>
+  <tr><td>me.blocked</td><td>1 if the robot has been unable to move for >0.5 s, else 0.</td></tr>
+  <tr><td>me.wallHit</td><td>1 if touching a wall this frame, else 0.</td></tr>
+  <tr><td>me.robotHit</td><td>1 if touching another robot this frame, else 0.</td></tr>
+  <tr><td>me.hitAngle</td><td>Angle toward the colliding object (radians).</td></tr>
+</table>
+
+<h3>World state</h3>
+<table>
+  <tr><th>Name</th><th>Description</th></tr>
+  <tr><td>world.arena</td><td>Arena half-size. Walls are at ±<em>arena</em> on both axes.</td></tr>
+  <tr><td>world.time</td><td>Elapsed battle time in seconds.</td></tr>
+  <tr><td>world.radarRange</td><td>Maximum scan range.</td></tr>
+</table>
+
+<h3>Scan results (set by <code>scan()</code>)</h3>
+<table>
+  <tr><th>Name</th><th>Description</th></tr>
+  <tr><td>scan.dist</td><td>Distance of the last scan hit (0 if miss).</td></tr>
+  <tr><td>scan.angle</td><td>Angle used in the last <code>scan()</code> call.</td></tr>
+  <tr><td>scan.friendly</td><td>1 if the last hit was a friendly robot, 0 otherwise.</td></tr>
+</table>
+</section>
+
+<!-- ===== Outputs ===== -->
+<section id="outputs">
+<h2>Outputs (write to control your robot)</h2>
+<p>
+  Outputs are applied at the end of each frame. You don't need to set all of them —
+  unset outputs use safe defaults (stay in place, speed 1, don't fire).
+</p>
+<table>
+  <tr><th>Name</th><th>Default</th><th>Description</th></tr>
+  <tr><td>out.moveX</td><td>me.x</td><td>Drive toward this X coordinate. The engine steers for you.</td></tr>
+  <tr><td>out.moveZ</td><td>me.z</td><td>Drive toward this Z coordinate.</td></tr>
+  <tr><td>out.speed</td><td>1.0</td><td>Speed fraction. 0 = stopped, 1 = normal, 1.3 = maximum.</td></tr>
+  <tr><td>out.aim</td><td>(no change)</td><td>Rotate turret to this angle (radians). Leave unset to keep current aim.</td></tr>
+  <tr><td>out.fire</td><td>0</td><td>Set non-zero to fire a bullet this frame.</td></tr>
+</table>
+<div class="tip"><strong>Tip:</strong> Angles use the convention 0 = +Z axis (north), increasing clockwise.
+To aim at a world position <code>(px, pz)</code> from your position:
+<code>out.aim = atan2(px - me.x, pz - me.z)</code></div>
+</section>
+
+<!-- ===== Functions ===== -->
+<section id="functions">
+<h2>Built-in functions</h2>
+
+<h3>Math</h3>
+<table>
+  <tr><th>Call</th><th>Returns</th></tr>
+  <tr><td>sin(x)</td><td>Sine of x (radians).</td></tr>
+  <tr><td>cos(x)</td><td>Cosine of x.</td></tr>
+  <tr><td>atan2(y, x)</td><td>Angle from origin to point (x, y), in radians. Range −π to π.</td></tr>
+  <tr><td>sqrt(x)</td><td>Square root.</td></tr>
+  <tr><td>abs(x)</td><td>Absolute value.</td></tr>
+  <tr><td>floor(x)</td><td>Round down to nearest integer.</td></tr>
+  <tr><td>min(a, b)</td><td>Smaller of a and b.</td></tr>
+  <tr><td>max(a, b)</td><td>Larger of a and b.</td></tr>
+  <tr><td>rand()</td><td>Random float in [0, 1).</td></tr>
+</table>
+
+<h3>scan(angle, width)</h3>
+<p>Fires a radar beam at <code>angle</code> with an arc of <code>width</code> radians.</p>
+<ul>
+  <li>Returns <code>0</code> if nothing is detected.</li>
+  <li>Returns a <strong>positive distance</strong> if an enemy is in the beam.</li>
+  <li>Returns a <strong>negative distance</strong> if a friendly is in the beam.</li>
+  <li>Also sets <code>scan.dist</code>, <code>scan.angle</code>, and <code>scan.friendly</code>.</li>
+</ul>
+<pre><code>d = scan(mem[0], 0.12)
+if d &gt; 0 then
+  -- enemy at distance d, at angle mem[0]
+  out.aim  = mem[0]
+  out.fire = 1
+end
+</code></pre>
+
+<h3>wallDist(angle)</h3>
+<p>Returns the distance to the nearest wall in the given direction. Useful for navigation and avoiding corners.</p>
+<pre><code>if wallDist(me.heading) &lt; 2.5 then
+  out.moveX = 0
+  out.moveZ = 0
+end
+</code></pre>
+</section>
+
+<!-- ===== Memory ===== -->
+<section id="memory">
+<h2>Persistent memory — mem[0]…mem[63]</h2>
+<p>
+  <code>mem[0]</code> through <code>mem[63]</code> survive between frames. Use them to remember:
+  radar sweep position, movement goals, last-seen enemy data, timers, and anything
+  else that must persist across the 60-fps execution cycle.
+</p>
+<p>The index must be a literal integer — no expressions or variables as indices.</p>
+<pre><code>-- mem[0] = radar sweep angle (advances each frame)
+mem[0] = mem[0] + 0.08
+
+-- mem[1], mem[2] = movement target
+mem[1] = 5.0
+mem[2] = -3.0
+out.moveX = mem[1]
+out.moveZ  = mem[2]
+</code></pre>
+<div class="tip"><strong>Tip:</strong> 64 floats is enough for most bots. Suggested layout:
+<code>mem[0]</code> = radar angle, <code>mem[1..2]</code> = movement goal, <code>mem[3]</code> = last-sighting time.</div>
+</section>
+
+<!-- ===== Tutorial ===== -->
+<section id="tutorial">
+<h2>Tutorial — building a bot step by step</h2>
+
+<h3>Step 1: Stay alive (minimal bot)</h3>
+<p>The simplest possible bot. It doesn't move or fire — but it compiles and runs.</p>
+<pre><code>-- Do nothing
+</code></pre>
+
+<h3>Step 2: Spin the radar and fire</h3>
+<p>
+  Use <code>mem[0]</code> to keep track of the radar sweep angle between frames.
+  Each frame, advance it a little and scan.
+</p>
+<pre><code>-- Advance sweep angle
+mem[0] = mem[0] + 0.10
+
+-- Scan in that direction
+d = scan(mem[0], 0.12)
+
+-- Fire if enemy found
+if d &gt; 0 then
+  out.aim  = mem[0]
+  out.fire = 1
+else
+  out.fire = 0
+end
+</code></pre>
+
+<h3>Step 3: Add movement</h3>
+<p>
+  Drive toward detected enemies. Use <code>mem[1]</code> and <code>mem[2]</code> as
+  a movement goal, updated only when you spot an enemy.
+</p>
+<pre><code>mem[0] = mem[0] + 0.10
+d = scan(mem[0], 0.12)
+
+if d &gt; 0 then
+  out.aim  = mem[0]
+  out.fire = 1
+  -- Compute enemy world position and drive there
+  mem[1] = me.x + sin(mem[0]) * d
+  mem[2] = me.z + cos(mem[0]) * d
+else
+  out.fire = 0
+end
+
+out.moveX = mem[1]
+out.moveZ  = mem[2]
+out.speed  = 1.0
+</code></pre>
+
+<h3>Step 4: Roam when idle</h3>
+<p>
+  If we haven't seen an enemy recently, pick a random destination so we keep moving.
+  Use <code>mem[3]</code> to track the last sighting time.
+</p>
+<pre><code>mem[0] = mem[0] + 0.10
+d = scan(mem[0], 0.12)
+
+if d &gt; 0 then
+  out.aim  = mem[0]
+  out.fire = 1
+  mem[3]   = world.time
+  mem[1]   = me.x + sin(mem[0]) * d
+  mem[2]   = me.z + cos(mem[0]) * d
+else
+  out.fire = 0
+
+  -- Roam if goal reached or no sighting in 3 seconds
+  dx    = me.x - mem[1]
+  dz    = me.z - mem[2]
+  near  = dx * dx + dz * dz &lt; 2.0
+  stale = world.time - mem[3] &gt; 3.0
+
+  if near or stale or me.wallHit or me.blocked then
+    ang    = rand() * 6.2832
+    r      = world.arena * 0.6
+    edge   = world.arena - 2.0
+    mem[1] = min(edge, max(-edge, me.x + sin(ang) * r))
+    mem[2] = min(edge, max(-edge, me.z + cos(ang) * r))
+    mem[3] = world.time
+  end
+end
+
+out.moveX = mem[1]
+out.moveZ  = mem[2]
+out.speed  = 1.0
+</code></pre>
+<p>This is already a competitive bot. The next section shows a more advanced variant that orbits enemies.</p>
+</section>
+
+<!-- ===== Examples ===== -->
+<section id="examples">
+<h2>Complete examples</h2>
+
+<h3>Hunter — sweep, lock on, orbit while firing</h3>
+<p>
+  A polished bot that sweeps its radar, locks onto enemies, moves into an
+  orbit at close range while firing, and roams when nothing is visible.
+  Uses <code>mem[0..3]</code>.
+</p>
+<pre><code>-- mem[0]  radar sweep angle
+-- mem[1]  movement goal x
+-- mem[2]  movement goal z
+-- mem[3]  world.time of last enemy sighting
+
+mem[0] = mem[0] + 0.12
+d = scan(mem[0], 0.09)
+
+if d &gt; 0 then
+  out.aim  = mem[0]
+  out.fire = 1
+  mem[3]   = world.time
+
+  px = me.x + sin(mem[0]) * d
+  pz = me.z + cos(mem[0]) * d
+
+  orbit  = atan2(me.x - px, me.z - pz) + 0.5
+  tx     = px + sin(orbit) * 4.5
+  tz     = pz + cos(orbit) * 4.5
+  edge   = world.arena - 2.0
+  mem[1] = min(edge, max(-edge, tx))
+  mem[2] = min(edge, max(-edge, tz))
+else
+  out.fire = 0
+
+  dx    = me.x - mem[1]
+  dz    = me.z - mem[2]
+  near  = dx * dx + dz * dz &lt; 1.5
+  stale = world.time - mem[3] &gt; 3.0
+
+  if near or stale or me.wallHit or me.blocked then
+    ang    = rand() * 6.2832
+    r      = world.arena * 0.7
+    edge   = world.arena - 2.0
+    mem[1] = min(edge, max(-edge, me.x + sin(ang) * r))
+    mem[2] = min(edge, max(-edge, me.z + cos(ang) * r))
+    mem[3] = world.time
+  end
+end
+
+out.moveX = mem[1]
+out.moveZ  = mem[2]
+out.speed  = 1.1
+</code></pre>
+
+<h3>Coward — flee from enemies, fire backward</h3>
+<pre><code>-- mem[0]  radar sweep angle
+
+mem[0] = mem[0] + 0.15
+d = scan(mem[0], 0.20)
+
+if d &gt; 0 and d &lt; 8.0 then
+  -- Enemy close: run away and shoot backward
+  flee   = mem[0] + 3.1416
+  out.moveX = me.x + sin(flee) * 10.0
+  out.moveZ = me.z + cos(flee) * 10.0
+  out.aim   = mem[0]
+  out.fire  = 1
+else
+  -- Drift toward center
+  out.moveX = 0
+  out.moveZ = 0
+  out.fire  = 0
+end
+
+out.speed = 1.2
+</code></pre>
+
+<h3>Sniper — hang back at max radar range</h3>
+<pre><code>-- mem[0]  radar sweep angle
+-- mem[1]  patrol x
+-- mem[2]  patrol z
+
+mem[0] = mem[0] + 0.07
+d = scan(mem[0], 0.06)
+
+if d &gt; 0 then
+  -- Fire only when enemy is at long range
+  out.aim  = mem[0]
+  out.fire = d &gt; world.radarRange * 0.5
+else
+  out.fire = 0
+end
+
+-- Move slowly around the edge
+if me.blocked or me.wallHit then
+  ang    = rand() * 6.2832
+  edge   = world.arena * 0.75
+  mem[1] = sin(ang) * edge
+  mem[2] = cos(ang) * edge
+end
+
+out.moveX = mem[1]
+out.moveZ  = mem[2]
+out.speed  = 0.6
+</code></pre>
+
+</section>
+
+</main>
+</body>
+</html>
