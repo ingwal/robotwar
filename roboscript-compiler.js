@@ -158,7 +158,7 @@
       return (vars[name] = nextVar++);
     }
     function beginStmt() { tempNext = nextVar; }
-    function allocTmp()  { if (tempNext >= RETURN_BASE) fail('Expression too complex'); return tempNext++; }
+    function allocTmp()  { if (tempNext >= RETURN_BASE) fail('Out of registers — too many local variables or expression too large'); return tempNext++; }
     function endStmt()   { tempNext = nextVar; }
 
     // ---- Bytecode emission ----
