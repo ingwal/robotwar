@@ -286,6 +286,7 @@ end
   <tr><td>world.howitzer.ready</td><td>1 when the howitzer has finished reloading, 0 while cooling down (5 s cooldown).</td></tr>
   <tr><td>world.howitzer.maxRange</td><td>Maximum howitzer range in world units (typically 40). Target must also be at least 1 unit away.</td></tr>
   <tr><td>world.bulletSpeed</td><td>Bullet travel speed in world units/second (typically 18). Use this for lead-shot calculations.</td></tr>
+  <tr><td>world.firstFrame</td><td>1 on the very first frame this robot runs, 0 on every subsequent frame. Use this to initialize <code>mem[]</code> slots that hold timestamps, since <code>mem[]</code> starts at 0 and <code>world.time</code> also starts at 0.</td></tr>
 </table>
 
 <h3>Radio (received this frame — teams only)</h3>

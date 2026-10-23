@@ -110,6 +110,7 @@
     'world.howitzer.ready':13,'world.howitzer.maxRange':14,
     'radio.tipX':15,'radio.tipZ':16,
     'me.teamId':17,'world.bulletSpeed':18,
+    'world.firstFrame':19,
     'scan.friendly':20,'scan.dist':21,'scan.angle':22,
     'radio.posX':23,'radio.posZ':24,
     'radio.deathTeamId':25,'radio.deathX':26,'radio.deathZ':27,

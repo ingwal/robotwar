@@ -32,6 +32,7 @@
     HOW_READY: 13, HOW_MAX_RANGE: 14,
     RADIO_TIP_X: 15, RADIO_TIP_Z: 16,
     ME_TEAM_ID: 17, BULLET_SPEED: 18,
+    FIRST_FRAME: 19,
     SCAN_FRIENDLY: 20, SCAN_DIST: 21, SCAN_ANGLE: 22,
     RADIO_POS_X: 23, RADIO_POS_Z: 24,
     RADIO_DEATH_TEAM: 25, RADIO_DEATH_X: 26, RADIO_DEATH_Z: 27,
@@ -75,6 +76,7 @@
       description,
       think(me, world) {
         // Restore persistent memory from the previous frame.
+        const isFirstFrame = !me.mem._vmem;
         const vmem = me.mem._vmem ?? (me.mem._vmem = new Float64Array(MEM_SIZE));
         for (let i = 0; i < MEM_SIZE; i++) reg[i] = vmem[i];
 
@@ -100,6 +102,7 @@
         reg[SENSOR_BASE + SID.HOW_MAX_RANGE] = world.howitzer.maxRange;
         reg[SENSOR_BASE + SID.ME_TEAM_ID]    = me.teamId  ?? 0;
         reg[SENSOR_BASE + SID.BULLET_SPEED]  = world.bulletSpeed ?? 18;
+        reg[SENSOR_BASE + SID.FIRST_FRAME]   = isFirstFrame ? 1 : 0;
 
         // Radio: expose the freshest message of each type received this frame.
         // All values are 0 when radio is disabled or no message of that type arrived.
