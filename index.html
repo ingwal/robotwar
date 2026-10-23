@@ -118,6 +118,7 @@
         <input type="range" id="arenaSize" min="10" max="30" value="14" step="1">
       </label>
       <label>Shots to kill: <input type="number" id="shotsToKill" min="1" max="10" value="6"></label>
+      <label>Time limit: <input type="number" id="roundMinutes" min="1" max="30" value="3"> min</label>
       <label>Land mines: <input type="number" id="mineCount" min="0" max="30" value="0"></label>
       <label>Mine strength:
         <select id="mineDamage">
@@ -195,7 +196,6 @@ const { mat4 } = RobotGfx;
 const MAX_HP = 6;
 const MAX_SPEED = 1.8;
 const BULLET_SPEED = 16;
-const ROUND_TIME = 180;
 const DEATH_TIME = 0.7;
 const ROBOT_RADIUS = 0.7;
 const MINE_DAMAGE_CHOICES = [1, 2, 4, 0]; // hits a blast deals to robots and wall blocks; 0 = deadly
@@ -384,6 +384,7 @@ const STRATEGY_KEYS = Object.keys(Strategies);
 
 let config = {
   arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2, ground: 'checker',
+  roundMinutes: 3,
   teamsMode: false, radioEnabled: true,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
@@ -401,6 +402,7 @@ function applySaved(saved) {
   if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
   if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
   if (MINE_DAMAGE_CHOICES.includes(saved.mineDamage)) config.mineDamage = saved.mineDamage;
+  if (saved.roundMinutes >= 1 && saved.roundMinutes <= 30) config.roundMinutes = saved.roundMinutes | 0;
   if (Object.hasOwn(GROUND_KINDS, saved.ground)) config.ground = saved.ground;
   if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
   if (typeof saved.radioEnabled === 'boolean') config.radioEnabled = saved.radioEnabled;
@@ -423,7 +425,8 @@ function applySaved(saved) {
 // browser remembered.
 function configToQuery(c) {
   const p = [['arena', c.arenaSize], ['layout', c.layout], ['ground', c.ground], ['shots', c.shotsToKill],
-    ['walls', c.wallHp], ['mines', c.mineCount], ['blast', c.mineDamage], ['radio', c.radioEnabled ? 1 : 0]];
+    ['walls', c.wallHp], ['mines', c.mineCount], ['blast', c.mineDamage], ['radio', c.radioEnabled ? 1 : 0],
+    ['minutes', c.roundMinutes]];
   if (c.teamsMode)
     p.push(['mode', 'teams'], ['teams', c.teamStrategies.slice(0, c.teamCount).map((t) => t.slice(0, c.robotsPerTeam).join(',')).join('.')]);
   else p.push(['robots', c.strategies.slice(0, c.robotCount).join(',')]);
@@ -434,7 +437,7 @@ function configFromQuery(search) {
   const q = new URLSearchParams(search), c = {};
   const num = (k) => (q.has(k) && q.get(k) !== '' ? Number(q.get(k)) : undefined);
   c.arenaSize = num('arena'); c.shotsToKill = num('shots'); c.wallHp = num('walls');
-  c.mineCount = num('mines'); c.mineDamage = num('blast');
+  c.mineCount = num('mines'); c.mineDamage = num('blast'); c.roundMinutes = num('minutes');
   c.layout = q.get('layout') ?? undefined; c.ground = q.get('ground') ?? undefined;
   if (q.has('mode')) c.teamsMode = q.get('mode') === 'teams';
   if (q.has('radio')) c.radioEnabled = q.get('radio') !== '0';
@@ -981,7 +984,7 @@ function update(dt) {
   if (phase === 'battle' && livingTeamCount() <= 1 && explosions.length === 0) {
     const rep = robots[0];
     endRound(rep ? rep.teamId : null, '');
-  } else if (phase === 'battle' && battleTime >= ROUND_TIME) {
+  } else if (phase === 'battle' && battleTime >= config.roundMinutes * 60) {
     const teamHp = {};
     for (const r of robots.filter((r) => r.dying === null))
       teamHp[r.teamId] = (teamHp[r.teamId] ?? 0) + r.hp;
@@ -1133,6 +1136,7 @@ function showSetup() {
   document.getElementById('shotsToKill').value = config.shotsToKill;
   document.getElementById('mineCount').value = config.mineCount;
   document.getElementById('mineDamage').value = config.mineDamage;
+  document.getElementById('roundMinutes').value = config.roundMinutes;
   document.getElementById('wallHp').value = config.wallHp;
   document.getElementById('layoutPick').value = config.layout;
   document.getElementById('groundPick').value = config.ground;
@@ -1192,6 +1196,10 @@ document.getElementById('layoutPick').addEventListener('change', (e) => {
 
 document.getElementById('radioEnabled').addEventListener('change', (e) => {
   config.radioEnabled = e.target.checked;
+});
+
+document.getElementById('roundMinutes').addEventListener('input', (e) => {
+  config.roundMinutes = Math.max(1, Math.min(30, Math.floor(+e.target.value) || 3));
 });
 
 document.getElementById('teamsMode').addEventListener('change', (e) => {
@@ -1445,7 +1453,7 @@ function buildBoard() {
 }
 
 function updateBoard() {
-  const left = Math.max(0, Math.ceil(ROUND_TIME - battleTime));
+  const left = Math.max(0, Math.ceil(config.roundMinutes * 60 - battleTime));
   const clockText = `Time left ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
   if (clock.textContent !== clockText) clock.textContent = clockText;
   for (const b of boardRows) {
