@@ -37,6 +37,8 @@
     RADIO_POS_X: 23, RADIO_POS_Z: 24,
     RADIO_DEATH_TEAM: 25, RADIO_DEATH_X: 26, RADIO_DEATH_Z: 27,
     RADIO_TIP_VX: 28, RADIO_TIP_VZ: 29,
+    RADIO_POS2_X: 30, RADIO_POS2_Z: 31,
+    RADIO_POS3_X: 32, RADIO_POS3_Z: 33,
   };
 
   // ---- Output IDs (used with WRO) ----
@@ -104,26 +106,37 @@
         reg[SENSOR_BASE + SID.BULLET_SPEED]  = world.bulletSpeed ?? 18;
         reg[SENSOR_BASE + SID.FIRST_FRAME]   = isFirstFrame ? 1 : 0;
 
-        // Radio: expose the freshest message of each type received this frame.
-        // All values are 0 when radio is disabled or no message of that type arrived.
+        // Radio: enemy tips and deaths come from this frame's inbox only.
+        // Position broadcasts use a 3-second rolling window so bots see all
+        // recent teammate positions, not just the one that happened to arrive
+        // this frame — matching JS bot behaviour with their teamPos arrays.
+        const posWin = me.mem._posWin ?? (me.mem._posWin = []);
         let _rTipX = 0, _rTipZ = 0, _rTipVX = 0, _rTipVZ = 0;
-        let _rPosX = 0, _rPosZ = 0;
         let _rDeathTeam = 0, _rDeathX = 0, _rDeathZ = 0;
         if (world.radio) {
           for (const msg of world.radio.inbox) {
-            if (msg.type === 'enemy'    && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; _rTipVX = msg.vx ?? 0; _rTipVZ = msg.vz ?? 0; }
-            if (msg.type === 'position' && _rPosX      === 0) { _rPosX = msg.x; _rPosZ = msg.z; }
-            if (msg.type === 'death'    && _rDeathTeam === 0) {
+            if (msg.type === 'enemy'   && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; _rTipVX = msg.vx ?? 0; _rTipVZ = msg.vz ?? 0; }
+            if (msg.type === 'position') posWin.push({ x: msg.x, z: msg.z, t: world.time });
+            if (msg.type === 'death'   && _rDeathTeam === 0) {
               _rDeathTeam = msg.teamId ?? 0; _rDeathX = msg.x ?? 0; _rDeathZ = msg.z ?? 0;
             }
           }
         }
+        // Trim entries older than 3 s (runs even when radio is off so window drains).
+        let _ptrim = 0;
+        while (_ptrim < posWin.length && posWin[_ptrim].t < world.time - 3) _ptrim++;
+        if (_ptrim > 0) posWin.splice(0, _ptrim);
+        const _pw = posWin;
         reg[SENSOR_BASE + SID.RADIO_TIP_X]      = _rTipX;
         reg[SENSOR_BASE + SID.RADIO_TIP_Z]      = _rTipZ;
         reg[SENSOR_BASE + SID.RADIO_TIP_VX]     = _rTipVX;
         reg[SENSOR_BASE + SID.RADIO_TIP_VZ]     = _rTipVZ;
-        reg[SENSOR_BASE + SID.RADIO_POS_X]      = _rPosX;
-        reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _rPosZ;
+        reg[SENSOR_BASE + SID.RADIO_POS_X]      = _pw.length > 0 ? _pw[_pw.length - 1].x : 0;
+        reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _pw.length > 0 ? _pw[_pw.length - 1].z : 0;
+        reg[SENSOR_BASE + SID.RADIO_POS2_X]     = _pw.length > 1 ? _pw[_pw.length - 2].x : 0;
+        reg[SENSOR_BASE + SID.RADIO_POS2_Z]     = _pw.length > 1 ? _pw[_pw.length - 2].z : 0;
+        reg[SENSOR_BASE + SID.RADIO_POS3_X]     = _pw.length > 2 ? _pw[_pw.length - 3].x : 0;
+        reg[SENSOR_BASE + SID.RADIO_POS3_Z]     = _pw.length > 2 ? _pw[_pw.length - 3].z : 0;
         reg[SENSOR_BASE + SID.RADIO_DEATH_TEAM] = _rDeathTeam;
         reg[SENSOR_BASE + SID.RADIO_DEATH_X]    = _rDeathX;
         reg[SENSOR_BASE + SID.RADIO_DEATH_Z]    = _rDeathZ;

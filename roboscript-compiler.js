@@ -113,6 +113,7 @@
     'world.firstFrame':19,
     'scan.friendly':20,'scan.dist':21,'scan.angle':22,
     'radio.posX':23,'radio.posZ':24,
+    'radio.pos2X':30,'radio.pos2Z':31,'radio.pos3X':32,'radio.pos3Z':33,
     'radio.deathTeamId':25,'radio.deathX':26,'radio.deathZ':27,
     'radio.tipVX':28,'radio.tipVZ':29,
   };

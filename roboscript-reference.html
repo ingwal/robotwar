@@ -289,20 +289,24 @@ end
   <tr><td>world.firstFrame</td><td>1 on the very first frame this robot runs, 0 on every subsequent frame. Use this to initialize <code>mem[]</code> slots that hold timestamps, since <code>mem[]</code> starts at 0 and <code>world.time</code> also starts at 0.</td></tr>
 </table>
 
-<h3>Radio (received this frame — teams only)</h3>
+<h3>Radio (teams only)</h3>
 <table>
   <tr><th>Name</th><th>Description</th></tr>
   <tr><td>radio.tipX</td><td>X coordinate of the latest enemy-sighting broadcast received from a teammate this frame. 0 if no tip arrived or radio is off.</td></tr>
   <tr><td>radio.tipZ</td><td>Z coordinate of that tip.</td></tr>
   <tr><td>radio.tipVX</td><td>Enemy velocity X included in that tip (0 if the sender did not broadcast velocity or no tip arrived).</td></tr>
   <tr><td>radio.tipVZ</td><td>Enemy velocity Z included in that tip.</td></tr>
-  <tr><td>radio.posX</td><td>X coordinate of the most recent own-position broadcast received from a teammate this frame. 0 if none arrived or radio is off.</td></tr>
+  <tr><td>radio.posX</td><td>X coordinate of the most recent teammate position broadcast in the last 3 seconds. 0 if none or radio is off.</td></tr>
   <tr><td>radio.posZ</td><td>Z coordinate of that broadcast.</td></tr>
+  <tr><td>radio.pos2X</td><td>X coordinate of the second most recent teammate position in the 3-second window (0 if fewer than 2 entries).</td></tr>
+  <tr><td>radio.pos2Z</td><td>Z coordinate of that broadcast.</td></tr>
+  <tr><td>radio.pos3X</td><td>X coordinate of the third most recent teammate position in the 3-second window (0 if fewer than 3 entries).</td></tr>
+  <tr><td>radio.pos3Z</td><td>Z coordinate of that broadcast.</td></tr>
   <tr><td>radio.deathTeamId</td><td>Team ID of the most recent robot that died this frame (0 if none). Death events are sent to every robot in the battle, not just teammates.</td></tr>
   <tr><td>radio.deathX</td><td>X position where that robot died.</td></tr>
   <tr><td>radio.deathZ</td><td>Z position where that robot died.</td></tr>
 </table>
-<p>All radio values reset to 0 every frame. Copy anything you need to keep into <code>mem[]</code>.</p>
+<p>Enemy tips and death events reset to 0 every frame — copy anything you need into <code>mem[]</code>. Position sensors use a 3-second rolling window maintained by the engine, so no manual caching is needed.</p>
 
 <h3>Scan results (set by <code>scan()</code>)</h3>
 <table>
@@ -387,7 +391,7 @@ with radar shots — corners, robots behind walls, or enemies spotted via radio.
 <h3>Position broadcasts (dispersion)</h3>
 <ul>
   <li><strong>Send:</strong> set <code>out.sendPos</code> to a non-zero value to broadcast your current position.</li>
-  <li><strong>Receive:</strong> <code>radio.posX</code> / <code>radio.posZ</code> — most recent teammate position received this frame. Use this to spread out and avoid clustering.</li>
+  <li><strong>Receive:</strong> <code>radio.posX/Z</code>, <code>radio.pos2X/Z</code>, <code>radio.pos3X/Z</code> — up to three recent teammate positions from a 3-second engine-maintained window (most recent first). Use these to spread out and avoid clustering. No manual caching needed — the engine accumulates them across frames.</li>
 </ul>
 <h3>Death events</h3>
 <ul>
@@ -420,19 +424,31 @@ if world.time - mem[22] &gt; 2.0 then
 end
 
 -- ---- Teammate dispersion ----
+-- Engine provides up to 3 recent teammate positions; no manual caching needed.
+-- Flee from the average of whichever are within 12 units.
+nearX = 0; nearZ = 0; nearCnt = 0
 if radio.posX != 0 then
-  mem[23] = radio.posX
-  mem[24] = radio.posZ
-  mem[25] = world.time
-end
-if world.time - mem[25] &lt; 3.0 then
-  tdx = mem[23] - me.x
-  tdz = mem[24] - me.z
-  if tdx * tdx + tdz * tdz &lt; 144.0 then   -- teammate within 12 units
-    fleeAng = atan2(me.x - mem[23], me.z - mem[24])
-    out.moveX = me.x + sin(fleeAng) * 24.0
-    out.moveZ = me.z + cos(fleeAng) * 24.0
+  tdx = radio.posX - me.x; tdz = radio.posZ - me.z
+  if tdx * tdx + tdz * tdz &lt; 144.0 then
+    nearX = nearX + radio.posX; nearZ = nearZ + radio.posZ; nearCnt = nearCnt + 1
   end
+end
+if radio.pos2X != 0 then
+  tdx = radio.pos2X - me.x; tdz = radio.pos2Z - me.z
+  if tdx * tdx + tdz * tdz &lt; 144.0 then
+    nearX = nearX + radio.pos2X; nearZ = nearZ + radio.pos2Z; nearCnt = nearCnt + 1
+  end
+end
+if radio.pos3X != 0 then
+  tdx = radio.pos3X - me.x; tdz = radio.pos3Z - me.z
+  if tdx * tdx + tdz * tdz &lt; 144.0 then
+    nearX = nearX + radio.pos3X; nearZ = nearZ + radio.pos3Z; nearCnt = nearCnt + 1
+  end
+end
+if nearCnt &gt; 0 then
+  fleeAng = atan2(me.x - nearX / nearCnt, me.z - nearZ / nearCnt)
+  out.moveX = me.x + sin(fleeAng) * 24.0
+  out.moveZ = me.z + cos(fleeAng) * 24.0
 end
 
 -- ---- Count enemy deaths for backup detection ----
