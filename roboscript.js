@@ -16,10 +16,12 @@
 (function (global) {
   'use strict';
 
-  const BUDGET      = 4000;  // max instructions executed per frame
-  const MEM_SIZE    = 64;    // persistent registers
-  const SENSOR_BASE = 128;
-  const OUTPUT_BASE = 192;
+  const BUDGET         = 4000;  // max instructions executed per frame
+  const MEM_SIZE       = 64;    // persistent registers
+  const SENSOR_BASE    = 128;
+  const OUTPUT_BASE    = 192;
+  const RETURN_BASE    = 124;   // function return value registers 124-127
+  const MAX_CALL_DEPTH = 10;
 
   // ---- Sensor IDs (used with RDS / direct register access) ----
   const SID = {
@@ -49,7 +51,7 @@
     ABS: 0x0E, FLR: 0x0F, MIN: 0x10, MAX: 0x11, RND: 0x12,
     CEQ: 0x20, CNE: 0x21, CLT: 0x22, CLE: 0x23, CGT: 0x24, CGE: 0x25,
     AND: 0x26, OR:  0x27, NOT: 0x28,
-    JMP: 0x30, JNZ: 0x31, JZ:  0x32,
+    JMP: 0x30, JNZ: 0x31, JZ:  0x32, CALL: 0x33, RET: 0x34,
     SCN: 0x40, WLD: 0x41, RDS: 0x42, WRO: 0x43,
     HLT: 0xFF,
   };
@@ -115,6 +117,7 @@
         // Execute bytecode.
         const len = bytecode.length;
         let pc = 0, budget = BUDGET;
+        const callStack = [];
         while (pc < len && budget-- > 0) {
           const w0  = bytecode[pc];
           const imm = bytecode[pc + 1];
@@ -163,9 +166,18 @@
             case OP.NOT: reg[dst] = reg[a] !== 0 ? 0 : 1; break;
 
             // Control flow (imm = target word-index, i.e. the new value of pc)
-            case OP.JMP: pc = imm | 0; break;
-            case OP.JNZ: if (reg[dst] !== 0) pc = imm | 0; break;
-            case OP.JZ:  if (reg[dst] === 0) pc = imm | 0; break;
+            case OP.JMP:  pc = imm | 0; break;
+            case OP.JNZ:  if (reg[dst] !== 0) pc = imm | 0; break;
+            case OP.JZ:   if (reg[dst] === 0) pc = imm | 0; break;
+            case OP.CALL:
+              if (callStack.length >= MAX_CALL_DEPTH) { pc = len; break; }
+              callStack.push(pc);
+              pc = imm | 0;
+              break;
+            case OP.RET:
+              if (callStack.length === 0) { pc = len; break; }
+              pc = callStack.pop();
+              break;
 
             // Sensors / I/O
             case OP.SCN: {
@@ -228,7 +240,7 @@
       if (!VALID_OPS.has(op))
         return `unknown opcode 0x${op.toString(16)} at instruction ${i / 2}`;
       const imm = bytecode[i + 1];
-      if (op === OP.JMP || op === OP.JNZ || op === OP.JZ) {
+      if (op === OP.JMP || op === OP.JNZ || op === OP.JZ || op === OP.CALL) {
         const target = imm | 0;
         if (target < 0 || target >= len || target % 2 !== 0)
           return `jump target ${imm} out of range or misaligned at instruction ${i / 2}`;

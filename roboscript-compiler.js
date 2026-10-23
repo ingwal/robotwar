@@ -29,12 +29,14 @@
     WHILE:'while', DO:'do', LOOP:'loop',
     BREAK:'break', CONTINUE:'continue',
     AND:'and', OR:'or', NOT:'not',
+    FUNCTION:'function', RETURN:'return',
     EOF:'EOF',
   };
 
   const KW = new Set([
     'if','then','elseif','else','end','while','do','loop',
     'break','continue','and','or','not',
+    'function','return',
   ]);
 
   // ---- Lexer ----
@@ -92,12 +94,13 @@
     NEG:0x09,SIN:0x0A,COS:0x0B,AT2:0x0C,SQT:0x0D,ABS:0x0E,FLR:0x0F,
     MIN:0x10,MAX:0x11,RND:0x12,
     CEQ:0x20,CNE:0x21,CLT:0x22,CLE:0x23,CGT:0x24,CGE:0x25,AND:0x26,OR:0x27,NOT:0x28,
-    JMP:0x30,JNZ:0x31,JZ:0x32,
+    JMP:0x30,JNZ:0x31,JZ:0x32,CALL:0x33,RET:0x34,
     SCN:0x40,WLD:0x41,RDS:0x42,WRO:0x43,HLT:0xFF,
   };
 
-  const SENSOR_BASE = 128;
-  const OUTPUT_BASE = 192;
+  const SENSOR_BASE  = 128;
+  const OUTPUT_BASE  = 192;
+  const RETURN_BASE  = 124;  // registers 124-127: function return values (4 slots)
 
   // Sensor register offsets (read via direct register reference or RDS)
   const SENSOR = {
@@ -127,6 +130,8 @@
     let nextVar   = 64;   // next unused variable register (grows up from 64)
     let tempNext  = 64;   // temporary register watermark (reset per statement)
     const loops   = [];   // loop-context stack { breaks:[], cont:number }
+    const funcs   = {};   // funcName → { startPC, numParams, numReturns, frameBase }
+    let currentFn = null; // non-null while compiling a function body
 
     let pos = 0;
     const peek  = ()  => toks[pos];
@@ -141,11 +146,11 @@
     // ---- Register allocation ----
     function allocVar(name) {
       if (name in vars) return vars[name];
-      if (nextVar >= 128) fail('Too many variables (max 64)');
+      if (nextVar >= RETURN_BASE) fail('Too many variables — function frames exceed register budget');
       return (vars[name] = nextVar++);
     }
     function beginStmt() { tempNext = nextVar; }
-    function allocTmp()  { if (tempNext >= 128) fail('Expression too complex'); return tempNext++; }
+    function allocTmp()  { if (tempNext >= RETURN_BASE) fail('Expression too complex'); return tempNext++; }
     function endStmt()   { tempNext = nextVar; }
 
     // ---- Bytecode emission ----
@@ -157,8 +162,9 @@
     }
 
     // Returns the index of the imm slot just emitted, for later back-patching.
-    function emitJMP(tgt = 0) { const s = code.length + 1; emit(OP.JMP, 0, 0, 0, tgt); return s; }
-    function emitJZ (r, tgt=0){ const s = code.length + 1; emit(OP.JZ,  r, 0, 0, tgt); return s; }
+    function emitJMP(tgt = 0) { const s = code.length + 1; emit(OP.JMP,  0, 0, 0, tgt); return s; }
+    function emitJZ (r, tgt=0){ const s = code.length + 1; emit(OP.JZ,   r, 0, 0, tgt); return s; }
+    function emitCALL(tgt)    {                             emit(OP.CALL, 0, 0, 0, tgt);             }
 
     const curPC  = ()      => code.length;          // word-index of next instruction
     const patch  = (s, t)  => { code[s] = t; };     // back-patch imm slot s to target t
@@ -321,6 +327,27 @@
             emit(BIN[name], d, a, b);
             return d;
           }
+          // User-defined function call (single-value expression context)
+          if (name in funcs) {
+            const fn = funcs[name];
+            if (fn.numReturns === 0) fail(`'${name}' returns no value`);
+            const args = [];
+            if (!chk(T.RP)) {
+              args.push(expr());
+              while (chk(T.COMMA)) { adv(); args.push(expr()); }
+            }
+            eat(T.RP);
+            if (args.length !== fn.numParams)
+              fail(`'${name}': expected ${fn.numParams} argument(s), got ${args.length}`);
+            for (let i = 0; i < args.length; i++) {
+              if (args[i] !== fn.frameBase + i) emit(OP.MOV, fn.frameBase + i, args[i], 0);
+            }
+            emitCALL(fn.startPC);
+            // Copy first return value to a fresh temp so nested calls don't clobber it.
+            const d = allocTmp();
+            emit(OP.MOV, d, RETURN_BASE, 0);
+            return d;
+          }
           fail(`Unknown function '${name}'`);
         }
 
@@ -358,6 +385,7 @@
       else if (tok.t === T.LOOP)     { adv(); stmtLoop(); }
       else if (tok.t === T.BREAK)    { adv(); stmtBreak(); }
       else if (tok.t === T.CONTINUE) { adv(); stmtContinue(); }
+      else if (tok.t === T.RETURN)   { adv(); stmtReturn(); }
       else if (tok.t === T.IDENT)    { stmtAssign(); }
       else fail(`Expected statement, got '${tok.t}'`);
       endStmt();
@@ -442,6 +470,62 @@
       emit(OP.JMP, 0, 0, 0, loops[loops.length - 1].cont);
     }
 
+    function stmtReturn() {
+      if (!currentFn) fail("'return' outside function");
+      // Return value list ends when the next token can't start an expression.
+      const canStart = new Set([T.NUM, T.IDENT, T.LP, T.MINUS, T.NOT]);
+      const vals = [];
+      if (canStart.has(peek().t)) {
+        vals.push(expr());
+        while (chk(T.COMMA)) { adv(); vals.push(expr()); }
+      }
+      if (currentFn.returns >= 0 && currentFn.returns !== vals.length)
+        fail(`inconsistent return value count in '${currentFn.name}'`);
+      currentFn.returns = vals.length;
+      for (let i = 0; i < vals.length; i++) {
+        if (vals[i] !== RETURN_BASE + i) emit(OP.MOV, RETURN_BASE + i, vals[i], 0);
+      }
+      emit(OP.RET, 0, 0, 0);
+    }
+
+    function compileFunctionDef() {
+      const fname = eat(T.IDENT).v;
+      if (fname in funcs) fail(`Duplicate function '${fname}'`);
+      eat(T.LP);
+      const params = [];
+      if (!chk(T.RP)) {
+        params.push(eat(T.IDENT).v);
+        while (chk(T.COMMA)) { adv(); params.push(eat(T.IDENT).v); }
+      }
+      eat(T.RP);
+
+      const startPC   = curPC();
+      const frameBase = nextVar;
+
+      // Function gets its own variable namespace; outer scope is restored after.
+      // nextVar keeps advancing so the frame is permanently carved from the pool.
+      const outerVars = Object.assign({}, vars);
+      for (const k of Object.keys(vars)) delete vars[k];
+
+      for (const p of params) allocVar(p);
+
+      const outerFn = currentFn;
+      currentFn = { name: fname, returns: -1 };
+
+      stmtList();
+
+      emit(OP.RET, 0, 0, 0);  // implicit return at end of body
+      eat(T.END);
+
+      const numReturns = currentFn.returns < 0 ? 0 : currentFn.returns;
+      currentFn = outerFn;
+      funcs[fname] = { startPC, numParams: params.length, numReturns, frameBase };
+
+      for (const k of Object.keys(vars)) delete vars[k];
+      Object.assign(vars, outerVars);
+      // nextVar is NOT restored — the function's register frame is permanent.
+    }
+
     function stmtAssign() {
       const name = adv().v;
 
@@ -455,6 +539,25 @@
         if (q in OUTPUT) { emit(OP.WRO, OUTPUT[q], r, 0); return; }
         if (q in SENSOR) fail(`'${q}' is read-only`);
         fail(`Unknown field '${q}'`);
+      }
+
+      // Bare function call as statement: foo(args)  (return values discarded)
+      if (chk(T.LP) && name in funcs) {
+        adv();
+        const fn = funcs[name];
+        const args = [];
+        if (!chk(T.RP)) {
+          args.push(expr());
+          while (chk(T.COMMA)) { adv(); args.push(expr()); }
+        }
+        eat(T.RP);
+        if (args.length !== fn.numParams)
+          fail(`'${name}': expected ${fn.numParams} argument(s), got ${args.length}`);
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] !== fn.frameBase + i) emit(OP.MOV, fn.frameBase + i, args[i], 0);
+        }
+        emitCALL(fn.startPC);
+        return;
       }
 
       // mem[i] = expr
@@ -471,6 +574,36 @@
         return;
       }
 
+      // multi-assign: a, b = foo(...)
+      if (chk(T.COMMA)) {
+        const targets = [name];
+        while (chk(T.COMMA)) { adv(); targets.push(eat(T.IDENT).v); }
+        eat(T.ASSIGN);
+        const fname = eat(T.IDENT).v;
+        if (!(fname in funcs)) fail(`multi-assign right-hand side must be a user-defined function call`);
+        const fn = funcs[fname];
+        if (targets.length !== fn.numReturns)
+          fail(`'${fname}' returns ${fn.numReturns} value(s), but ${targets.length} target(s) given`);
+        eat(T.LP);
+        const args = [];
+        if (!chk(T.RP)) {
+          args.push(expr());
+          while (chk(T.COMMA)) { adv(); args.push(expr()); }
+        }
+        eat(T.RP);
+        if (args.length !== fn.numParams)
+          fail(`'${fname}': expected ${fn.numParams} argument(s), got ${args.length}`);
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] !== fn.frameBase + i) emit(OP.MOV, fn.frameBase + i, args[i], 0);
+        }
+        emitCALL(fn.startPC);
+        for (let i = 0; i < targets.length; i++) {
+          const vr = allocVar(targets[i]);
+          if (vr !== RETURN_BASE + i) emit(OP.MOV, vr, RETURN_BASE + i, 0);
+        }
+        return;
+      }
+
       // varName = expr
       eat(T.ASSIGN);
       const r = expr();
@@ -479,9 +612,21 @@
     }
 
     // ---- Top-level ----
+    // Function definitions come first; a single JMP at the start of bytecode
+    // skips over all function bodies so they're not executed inline.
     try {
-      stmtList();
-      if (!chk(T.EOF)) fail(`Unexpected token '${peek().t}'`);
+      let mainJmpSlot = -1;
+      while (!chk(T.EOF)) {
+        if (peek().t === T.FUNCTION) {
+          if (mainJmpSlot < 0) mainJmpSlot = emitJMP(0);
+          adv();
+          compileFunctionDef();
+        } else {
+          if (mainJmpSlot >= 0) { patch(mainJmpSlot, curPC()); mainJmpSlot = -1; }
+          stmt();
+        }
+      }
+      if (mainJmpSlot >= 0) patch(mainJmpSlot, curPC());
       emit(OP.HLT, 0, 0, 0, 0);
       return { bytecode: code, vars, error: null };
     } catch (e) {

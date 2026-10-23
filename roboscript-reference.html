@@ -142,7 +142,8 @@
   <a href="#outputs">Outputs</a>
   <a href="#howitzer">Howitzer</a>
   <a href="#radio">Radio</a>
-  <a href="#functions">Functions</a>
+  <a href="#functions">Built-in functions</a>
+  <a href="#userfunctions">User functions</a>
   <a href="#memory">Persistent memory</a>
   <a href="#tutorial">Tutorial</a>
   <a href="#examples">Examples</a>
@@ -441,6 +442,67 @@ end
   out.moveX = 0
   out.moveZ = 0
 end
+</code></pre>
+</section>
+
+<!-- ===== User-defined functions ===== -->
+<section id="userfunctions">
+<h2>User-defined functions</h2>
+<p>You can define your own functions to encapsulate reusable logic. Functions must be defined <strong>before</strong> they are called. Recursion is not allowed.</p>
+
+<h3>Defining a function</h3>
+<pre><code>function name(param1, param2)
+  -- body
+  return value1, value2
+end
+</code></pre>
+<p>The <code>return</code> statement can return zero, one, or multiple values separated by commas.
+All <code>return</code> statements in a function must return the same number of values.
+A function with no <code>return</code> statement (or bare <code>return</code>) returns no values.</p>
+
+<h3>Calling a function</h3>
+<p>Single return value — use in any expression:</p>
+<pre><code>d = distance(ex, ez)
+out.speed = clamp(speed, 0.2, 1.5)
+</code></pre>
+<p>Multiple return values — use a multi-assign statement:</p>
+<pre><code>dx, dz = direction(ex, ez)
+</code></pre>
+<p>No return value — call as a bare statement:</p>
+<pre><code>update_goal(ex, ez)
+</code></pre>
+
+<h3>Register budget</h3>
+<p>Each function's local variables (parameters + locals) occupy a fixed slice of the 60 variable registers. If all function frames combined exceed this budget, the compiler reports an error. In practice, bots with a handful of small helper functions are well within the limit.</p>
+
+<h3>Example — geometry helpers</h3>
+<pre><code>-- Returns (dx, dz) unit vector from self to world point (tx, tz).
+function toTarget(tx, tz)
+  dx = tx - me.x
+  dz = tz - me.z
+  d  = sqrt(dx * dx + dz * dz)
+  if d &lt; 0.001 then
+    return 0.0, 0.0
+  end
+  return dx / d, dz / d
+end
+
+-- Returns lead-corrected world position to aim at.
+function leadShot(ex, ez, vx, vz, d)
+  lead = d / 18.0
+  return ex + vx * lead, ez + vz * lead
+end
+
+-- Main script
+d = scan(mem[0], 0.09)
+if d &gt; 0 then
+  ex = me.x + sin(mem[0]) * d
+  ez = me.z + cos(mem[0]) * d
+  ax, az = leadShot(ex, ez, mem[2], mem[3], d)
+  out.aim  = atan2(ax - me.x, az - me.z)
+  out.fire = 1
+end
+mem[0] = mem[0] + 0.1
 </code></pre>
 </section>
 
