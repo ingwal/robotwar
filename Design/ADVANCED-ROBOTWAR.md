@@ -16,8 +16,10 @@ for the least new infrastructure.
 *Effort: Medium — 1 week*
 Per-team base object on the map. Robots return to repair, respawn (for
 non-elimination modes), and resupply ammo. Foundation for CTF and
-base-assault modes. Depends on: having a map/tile system is helpful
-but not required for a simple version.
+base-assault modes. Depends on: **larger areas** — in a small arena
+the bases are so close together that a bot can howitzer-camp the
+entrance from across the map, making repair runs suicidal and the whole
+mechanic pointless. A map/tile system is helpful but not required.
 
 **Different end goals** (elimination, CTF, base assault, king of the hill)
 *Effort: Medium — 1 week per mode*
@@ -143,22 +145,23 @@ infrastructure of earlier ones.
 | # | Feature | Why here |
 |---|---------|----------|
 | 1 | **Robot archetypes** (Scout / Infantry / Tank / Artillery / Support) | Highest value, almost no new infrastructure. Changes everything about team composition immediately. |
-| 2 | **Ammunition and fuel limits** | Easy to add now; forces tactical decisions and makes home base meaningful. |
-| 3 | **Home base + repair + resupply** | Gives robots a reason to exist beyond fighting. Foundation for all objectives. |
-| 4 | **Respawn (for non-elimination modes)** | Trivial given home base. Makes longer game modes viable. |
-| 5 | **Game objectives** — CTF, base assault, king of the hill | Home base is ready; adds massive replayability. Start with king-of-the-hill (simplest), then CTF. |
-| 6 | **Advanced radio (byte budget)** | Self-contained API change. Competitive bots now have to design a signalling protocol. |
-| 7 | **Additional weapons** (EMP, plasma, smoke, repair beam) | Natural companion to archetypes. Each type now has a signature weapon. |
-| 8 | **Larger areas + spatial partitioning** | Technical groundwork. Needed before terrain and fog of war matter at scale. |
-| 9 | **Tile-based terrain + movement costs** | Maps become tactically interesting. Scouts and tanks now play very differently. |
-| 10 | **Multiple pre-designed maps** | Once the tile system exists, maps are cheap to produce. |
-| 11 | **Line of sight / fog of war** | Game-changer: ambushes, recon, hiding. Scouts become essential. |
-| 12 | **Camouflage** | Trivial given fog of war. New stealth archetype becomes possible. |
-| 13 | **Weather and time of day** | Adds variety; builds on tile/terrain multiplier system already in place. |
-| 14 | **3D terrain with elevation** | The "big" visual and mechanical upgrade. Everything before this is still fully playable; this makes it cinematic and strategically deep. |
-| 15 | **Replay and spectator mode** | Needs a reasonably stable game before it's worth building. Essential for competition. |
-| 16 | **Server + user accounts + secret bots** | Enables formal competition. Bots stored server-side; source truly hidden. |
-| 17 | **ELO ratings + tournament system** | The payoff for the server investment. |
+| 2 | **Ammunition and fuel limits** | Easy to add now; forces tactical decisions and makes home base meaningful later. |
+| 3 | **Respawn at fixed spawn point** | No base building needed — robots reappear at their starting corner after a delay. Makes longer game modes viable immediately. |
+| 4 | **King of the hill objective** | Needs no home base, just a neutral zone. Adds replayability with minimal new infrastructure. |
+| 5 | **Advanced radio (byte budget)** | Self-contained API change. Competitive bots now have to design a signalling protocol. |
+| 6 | **Additional weapons** (EMP, plasma, smoke, repair beam) | Natural companion to archetypes. Each type now has a signature weapon. |
+| 7 | **Larger areas + spatial partitioning** | Technical groundwork. Needed before home base and terrain matter at scale. |
+| 8 | **Home base + repair + resupply** | Only meaningful once the arena is large enough that the journey home costs real time and exposes the robot to risk. In a small arena bases are trivially howitzer-camped from anywhere on the map. |
+| 9 | **CTF and base assault objectives** | Now the home base is a real fortified position worth attacking and defending. |
+| 10 | **Tile-based terrain + movement costs** | Maps become tactically interesting. Scouts and tanks now play very differently. |
+| 11 | **Multiple pre-designed maps** | Once the tile system exists, maps are cheap to produce. |
+| 12 | **Line of sight / fog of war** | Game-changer: ambushes, recon, hiding. Scouts become essential. |
+| 13 | **Camouflage** | Trivial given fog of war. New stealth archetype becomes possible. |
+| 14 | **Weather and time of day** | Adds variety; builds on tile/terrain multiplier system already in place. |
+| 15 | **3D terrain with elevation** | The "big" visual and mechanical upgrade. Everything before this is still fully playable; this makes it cinematic and strategically deep. |
+| 16 | **Replay and spectator mode** | Needs a reasonably stable game before it's worth building. Essential for competition. |
+| 17 | **Server + user accounts + secret bots** | Enables formal competition. Bots stored server-side; source truly hidden. |
+| 18 | **ELO ratings + tournament system** | The payoff for the server investment. |
 
 ---
 
