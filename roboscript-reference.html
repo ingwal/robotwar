@@ -140,6 +140,8 @@
   <a href="#control">Control flow</a>
   <a href="#sensors">Sensors</a>
   <a href="#outputs">Outputs</a>
+  <a href="#howitzer">Howitzer</a>
+  <a href="#radio">Radio</a>
   <a href="#functions">Functions</a>
   <a href="#memory">Persistent memory</a>
   <a href="#tutorial">Tutorial</a>
@@ -279,7 +281,17 @@ end
   <tr><td>world.arena</td><td>Arena half-size. Walls are at ±<em>arena</em> on both axes.</td></tr>
   <tr><td>world.time</td><td>Elapsed battle time in seconds.</td></tr>
   <tr><td>world.radarRange</td><td>Maximum scan range.</td></tr>
+  <tr><td>world.howitzer.ready</td><td>1 when the howitzer has finished reloading, 0 while cooling down (5 s cooldown).</td></tr>
+  <tr><td>world.howitzer.maxRange</td><td>Maximum howitzer range in world units (typically 40). Target must also be at least 1 unit away.</td></tr>
 </table>
+
+<h3>Radio (received this frame — teams only)</h3>
+<table>
+  <tr><th>Name</th><th>Description</th></tr>
+  <tr><td>radio.tipX</td><td>X coordinate of the latest enemy-sighting broadcast received from a teammate this frame. 0 if no tip arrived or radio is off.</td></tr>
+  <tr><td>radio.tipZ</td><td>Z coordinate of that tip.</td></tr>
+</table>
+<p>Both values reset to 0 every frame. To use a tip across frames, copy it to <code>mem[]</code> when it is non-zero.</p>
 
 <h3>Scan results (set by <code>scan()</code>)</h3>
 <table>
@@ -304,10 +316,89 @@ end
   <tr><td>out.speed</td><td>1.0</td><td>Speed fraction. 0 = stopped, 1 = normal, 1.3 = maximum.</td></tr>
   <tr><td>out.aim</td><td>(no change)</td><td>Rotate turret to this angle (radians). Leave unset to keep current aim.</td></tr>
   <tr><td>out.fire</td><td>0</td><td>Set non-zero to fire a bullet this frame.</td></tr>
+  <tr><td>out.howitzerX</td><td>NaN</td><td>Fire the howitzer at this X coordinate (must set both X and Z). Silently ignored if the howitzer is still cooling down or the target is out of range.</td></tr>
+  <tr><td>out.howitzerZ</td><td>NaN</td><td>Fire the howitzer at this Z coordinate.</td></tr>
+  <tr><td>out.radioX</td><td>NaN</td><td>Broadcast an enemy sighting at this X to teammates (must set both X and Z). No effect in solo or radio-off battles.</td></tr>
+  <tr><td>out.radioZ</td><td>NaN</td><td>Z coordinate of the enemy sighting to broadcast.</td></tr>
 </table>
 <div class="tip"><strong>Tip:</strong> Angles use the convention 0 = +Z axis (north), increasing clockwise.
 To aim at a world position <code>(px, pz)</code> from your position:
 <code>out.aim = atan2(px - me.x, pz - me.z)</code></div>
+</section>
+
+<!-- ===== Howitzer ===== -->
+<section id="howitzer">
+<h2>Howitzer</h2>
+<p>
+  The howitzer lobs a high-arc shell that explodes on impact and damages
+  everything within its blast radius — including walls and friendly robots.
+  It has a <strong>5-second cooldown</strong> and a maximum range of
+  <strong><code>world.howitzer.maxRange</code></strong> units (typically 40).
+  The target must also be at least 1 unit away.
+</p>
+<p>
+  Fire it by setting both <code>out.howitzerX</code> and <code>out.howitzerZ</code>
+  to the target world position.  The shot is silently discarded if the howitzer
+  is still cooling down or the target is out of range, so always guard with
+  <code>world.howitzer.ready</code> and a range check.
+</p>
+<pre><code>-- Fire howitzer at last known enemy position (mem[1], mem[2])
+-- only when ready, in range, and the fix is fresh.
+if world.howitzer.ready and mem[12] == 1 then
+  hdx = mem[1] - me.x
+  hdz = mem[2] - me.z
+  hd  = sqrt(hdx * hdx + hdz * hdz)
+  if hd >= 2 and hd <= world.howitzer.maxRange then
+    out.howitzerX = mem[1]
+    out.howitzerZ = mem[2]
+  end
+end
+</code></pre>
+<div class="tip"><strong>Tip:</strong> The howitzer is most effective at targets you can't easily reach
+with radar shots — corners, robots behind walls, or enemies spotted via radio.</div>
+</section>
+
+<!-- ===== Radio ===== -->
+<section id="radio">
+<h2>Radio (teams only)</h2>
+<p>
+  In team battles with radio enabled, robots on the same team share a
+  radio channel.  RoboScript exposes a simple tip-passing interface:
+</p>
+<ul>
+  <li><strong>Receive:</strong> <code>radio.tipX</code> / <code>radio.tipZ</code> — the X/Z of
+      the latest enemy-sighting broadcast sent by a teammate <em>this frame</em>.
+      Both are 0 if no tip arrived or radio is off.</li>
+  <li><strong>Send:</strong> set <code>out.radioX</code> and <code>out.radioZ</code> to
+      broadcast an enemy position to all teammates this frame.</li>
+</ul>
+<p>
+  Because tips reset to 0 every frame, copy a received tip into <code>mem[]</code>
+  immediately and track its age with <code>world.time</code>.
+</p>
+<pre><code>-- Broadcast enemy position when we spot one
+if d > 0 then
+  out.radioX = me.x + sin(mem[0]) * d
+  out.radioZ = me.z + cos(mem[0]) * d
+end
+
+-- Store incoming tips in persistent memory
+if radio.tipX != 0 then
+  mem[20] = radio.tipX
+  mem[21] = radio.tipZ
+  mem[22] = world.time   -- when we received it
+end
+
+-- Use tip only while fresh (< 4 s old), and only when we lack our own fix
+tipAge = world.time - mem[22]
+if tipAge < 4 and world.time - mem[5] > 1.5 then
+  -- steer toward tip position stored in mem[20], mem[21]
+  out.moveX = mem[20]
+  out.moveZ = mem[21]
+end
+</code></pre>
+<div class="warn"><strong>Note:</strong> Radio has no effect in free-for-all (non-teams) battles or when
+the battle is configured with radio disabled.</div>
 </section>
 
 <!-- ===== Functions ===== -->
@@ -572,6 +663,156 @@ end
 out.moveX = mem[1]
 out.moveZ  = mem[2]
 out.speed  = 0.6
+</code></pre>
+
+<h3>Bombardier — orbit at medium range, howitzer finishes the job</h3>
+<p>
+  Keeps enough distance to stay in the howitzer's effective range, fires
+  bullets when it has line-of-sight, and lobs a shell at the last known
+  enemy position every time the howitzer reloads — even through walls.
+  Uses <code>mem[0..7]</code>.
+</p>
+<pre><code>-- mem[0]  radar sweep angle
+-- mem[1]  last enemy x
+-- mem[2]  last enemy z
+-- mem[3]  time of last sighting
+-- mem[4]  movement goal x
+-- mem[5]  movement goal z
+-- mem[6]  ever-seen flag (guards howitzer against firing at origin)
+-- mem[7]  orbit side (+1/-1)
+
+if mem[7] == 0 then
+  mem[7] = 1
+end
+
+mem[0] = mem[0] + 0.09
+d = scan(mem[0], 0.09)
+
+if d &gt; 0 then
+  ex = me.x + sin(mem[0]) * d
+  ez = me.z + cos(mem[0]) * d
+  mem[1] = ex
+  mem[2] = ez
+  mem[3] = world.time
+  mem[6] = 1
+
+  out.aim  = mem[0]
+  out.fire = 1
+
+  -- Orbit at medium range — good for howitzer arcs
+  rx   = me.x - ex
+  rz   = me.z - ez
+  rd   = sqrt(rx * rx + rz * rz)
+  R    = max(10.0, min(22.0, rd))
+  orb  = atan2(rx, rz) + mem[7] * 0.5
+  edge = world.arena - 2.5
+  mem[4] = min(edge, max(-edge, ex + sin(orb) * R))
+  mem[5] = min(edge, max(-edge, ez + cos(orb) * R))
+else
+  out.fire = 0
+
+  dx    = me.x - mem[4]
+  dz    = me.z - mem[5]
+  near  = dx * dx + dz * dz &lt; 2.0
+  stale = world.time - mem[3] &gt; 3.0
+
+  if near or stale or me.wallHit or me.blocked then
+    ang    = rand() * 6.2832
+    r      = world.arena * 0.65
+    edge   = world.arena - 2.5
+    mem[4] = min(edge, max(-edge, me.x + sin(ang) * r))
+    mem[5] = min(edge, max(-edge, me.z + cos(ang) * r))
+    mem[3] = world.time
+  end
+end
+
+-- Howitzer: fire at last known enemy when reloaded and in range.
+-- mem[6] prevents firing at (0,0) before any sighting.
+if world.howitzer.ready and mem[6] == 1 and world.time - mem[3] &lt; 5 then
+  hdx = mem[1] - me.x
+  hdz = mem[2] - me.z
+  hd  = sqrt(hdx * hdx + hdz * hdz)
+  if hd &gt;= 3 and hd &lt;= world.howitzer.maxRange then
+    out.howitzerX = mem[1]
+    out.howitzerZ = mem[2]
+  end
+end
+
+out.moveX = mem[4]
+out.moveZ  = mem[5]
+out.speed  = 1.1
+</code></pre>
+
+<h3>Team Hunter — share enemy sightings via radio</h3>
+<p>
+  Behaves like Hunter but broadcasts every enemy fix to teammates via
+  <code>out.radioX</code>/<code>out.radioZ</code>, and uses incoming
+  <code>radio.tipX</code>/<code>radio.tipZ</code> to steer toward enemies
+  a teammate spotted while the radar was pointed elsewhere.  In free-for-all
+  battles the radio outputs are silently ignored.  Uses <code>mem[0..5]</code>.
+</p>
+<pre><code>-- mem[0]  radar sweep angle
+-- mem[1]  last known enemy x (own fix or radio tip)
+-- mem[2]  last known enemy z
+-- mem[3]  time of last own sighting
+-- mem[4]  movement goal x
+-- mem[5]  movement goal z
+
+mem[0] = mem[0] + 0.12
+d = scan(mem[0], 0.09)
+
+if d &gt; 0 then
+  ex = me.x + sin(mem[0]) * d
+  ez = me.z + cos(mem[0]) * d
+  mem[1] = ex
+  mem[2] = ez
+  mem[3] = world.time
+
+  out.aim  = mem[0]
+  out.fire = 1
+
+  -- Share sighting with teammates
+  out.radioX = ex
+  out.radioZ = ez
+
+  -- Orbit prey at close range
+  orbit = atan2(me.x - ex, me.z - ez) + 0.5
+  edge  = world.arena - 2.0
+  mem[4] = min(edge, max(-edge, ex + sin(orbit) * 4.5))
+  mem[5] = min(edge, max(-edge, ez + cos(orbit) * 4.5))
+else
+  out.fire = 0
+
+  -- Update target from radio tip when our own fix is stale
+  if radio.tipX != 0 and world.time - mem[3] &gt; 1.5 then
+    mem[1] = radio.tipX
+    mem[2] = radio.tipZ
+  end
+
+  dx    = me.x - mem[4]
+  dz    = me.z - mem[5]
+  near  = dx * dx + dz * dz &lt; 1.5
+  stale = world.time - mem[3] &gt; 3.0
+
+  if near or stale or me.wallHit or me.blocked then
+    -- Chase last known position if still fresh, else roam
+    if world.time - mem[3] &lt; 5 then
+      mem[4] = mem[1]
+      mem[5] = mem[2]
+    else
+      ang    = rand() * 6.2832
+      r      = world.arena * 0.7
+      edge   = world.arena - 2.0
+      mem[4] = min(edge, max(-edge, me.x + sin(ang) * r))
+      mem[5] = min(edge, max(-edge, me.z + cos(ang) * r))
+    end
+    mem[3] = world.time
+  end
+end
+
+out.moveX = mem[4]
+out.moveZ  = mem[5]
+out.speed  = 1.1
 </code></pre>
 
 </section>

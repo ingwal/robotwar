@@ -27,14 +27,18 @@
     ME_HP: 4, ME_MAXHP: 5, ME_BLOCKED: 6, ME_WALLHIT: 7,
     ME_ROBOTHIT: 8, ME_HITANGLE: 9,
     ARENA: 10, TIME: 11, RADAR_RANGE: 12,
+    HOW_READY: 13, HOW_MAX_RANGE: 14,
+    RADIO_TIP_X: 15, RADIO_TIP_Z: 16,
     SCAN_FRIENDLY: 20, SCAN_DIST: 21, SCAN_ANGLE: 22,
   };
 
   // ---- Output IDs (used with WRO) ----
   // HOW_X / HOW_Z: NaN = don't fire howitzer (set to NaN by default each frame).
+  // RADIO_X / RADIO_Z: NaN = don't broadcast; non-NaN = send enemy tip to teammates.
   const OID = {
     MOVE_X: 0, MOVE_Z: 1, SPEED: 2, AIM: 3, FIRE: 4,
     HOW_X: 5, HOW_Z: 6,
+    RADIO_X: 7, RADIO_Z: 8,
   };
 
   // ---- Opcodes ----
@@ -84,15 +88,29 @@
         reg[SENSOR_BASE + SID.ARENA]       = world.arena;
         reg[SENSOR_BASE + SID.TIME]        = world.time;
         reg[SENSOR_BASE + SID.RADAR_RANGE] = world.radarRange;
+        reg[SENSOR_BASE + SID.HOW_READY]     = world.howitzer.ready ? 1 : 0;
+        reg[SENSOR_BASE + SID.HOW_MAX_RANGE] = world.howitzer.maxRange;
+
+        // Radio: expose the freshest enemy-sighting tip received from a teammate
+        // this frame. 0/0 when radio is disabled or no tip arrived this frame.
+        let _rTipX = 0, _rTipZ = 0;
+        if (world.radio) {
+          for (const msg of world.radio.inbox)
+            if (msg.type === 'enemy') { _rTipX = msg.x; _rTipZ = msg.z; break; }
+        }
+        reg[SENSOR_BASE + SID.RADIO_TIP_X] = _rTipX;
+        reg[SENSOR_BASE + SID.RADIO_TIP_Z] = _rTipZ;
 
         // Default outputs.
-        reg[OUTPUT_BASE + OID.MOVE_X] = me.x;   // stay in place
-        reg[OUTPUT_BASE + OID.MOVE_Z] = me.z;
-        reg[OUTPUT_BASE + OID.SPEED]  = 1.0;
-        reg[OUTPUT_BASE + OID.AIM]    = NaN;    // don't rotate turret
-        reg[OUTPUT_BASE + OID.FIRE]   = 0;
-        reg[OUTPUT_BASE + OID.HOW_X]  = NaN;   // don't fire howitzer
-        reg[OUTPUT_BASE + OID.HOW_Z]  = NaN;
+        reg[OUTPUT_BASE + OID.MOVE_X]  = me.x;   // stay in place
+        reg[OUTPUT_BASE + OID.MOVE_Z]  = me.z;
+        reg[OUTPUT_BASE + OID.SPEED]   = 1.0;
+        reg[OUTPUT_BASE + OID.AIM]     = NaN;   // don't rotate turret
+        reg[OUTPUT_BASE + OID.FIRE]    = 0;
+        reg[OUTPUT_BASE + OID.HOW_X]   = NaN;  // don't fire howitzer
+        reg[OUTPUT_BASE + OID.HOW_Z]   = NaN;
+        reg[OUTPUT_BASE + OID.RADIO_X] = NaN;  // don't broadcast
+        reg[OUTPUT_BASE + OID.RADIO_Z] = NaN;
 
         // Execute bytecode.
         const len = bytecode.length;
@@ -173,6 +191,11 @@
         // Build the output object the game engine expects.
         const hx = reg[OUTPUT_BASE + OID.HOW_X];
         const hz = reg[OUTPUT_BASE + OID.HOW_Z];
+        const rx = reg[OUTPUT_BASE + OID.RADIO_X];
+        const rz = reg[OUTPUT_BASE + OID.RADIO_Z];
+        // Send radio enemy tip if the bot set both RADIO_X and RADIO_Z.
+        if (!Number.isNaN(rx) && !Number.isNaN(rz) && world.radio)
+          world.radio.send({ type: 'enemy', x: rx, z: rz });
         const out = {
           moveTo: { x: reg[OUTPUT_BASE + OID.MOVE_X], z: reg[OUTPUT_BASE + OID.MOVE_Z] },
           speed:  reg[OUTPUT_BASE + OID.SPEED],
@@ -212,7 +235,7 @@
       }
       if (op === OP.RDS && a >= 64)
         return `RDS sensor id ${a} out of range at instruction ${i / 2}`;
-      if (op === OP.WRO && dst >= 7)
+      if (op === OP.WRO && dst >= 9)
         return `WRO output id ${dst} out of range at instruction ${i / 2}`;
     }
     return null;

@@ -1329,20 +1329,24 @@ document.getElementById('rseditor-add').addEventListener('click', () => {
     if (!source.trim()) { errEl.textContent = 'Paste your RoboScript source first.'; return; }
     const { bytecode, error } = RoboScriptCompiler.compile(source);
     if (error) { errEl.textContent = error; return; }
-    // Pick a unique strategy key derived from the name.
-    const base = 'rs_' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot');
-    let key = base, n = 2;
-    while (key in Strategies) key = base + '_' + n++;
+    // If a bot with this name already exists, update it in place; otherwise create a new one.
+    const existingKey = STRATEGY_KEYS.find((k) => k.startsWith('rs_') && Strategies[k]?.name === name);
+    let key = existingKey;
+    if (!key) {
+      const base = 'rs_' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'bot');
+      key = base; let n = 2;
+      while (key in Strategies) key = base + '_' + n++;
+    }
     // Use the first source comment line as the description if present.
     const desc = (source.match(/^--\s*(.+)$/m) || [])[1] ?? 'Custom RoboScript bot';
     RoboScript.register(key, name, desc, bytecode);
-    STRATEGY_KEYS.push(key);
+    if (!existingKey) STRATEGY_KEYS.push(key);
     showSetup();
     // Persist to localStorage so the bot survives page reloads.
     try {
       const saved = JSON.parse(localStorage.getItem('robotwar.bots') || '[]');
-      if (!saved.some((b) => b.name === name && b.source === source))
-        saved.push({ name, source });
+      const idx = saved.findIndex((b) => b.name === name);
+      if (idx >= 0) saved[idx] = { name, source }; else saved.push({ name, source });
       localStorage.setItem('robotwar.bots', JSON.stringify(saved));
     } catch {}
     // Show success then close.

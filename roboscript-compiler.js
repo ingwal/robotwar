@@ -104,6 +104,8 @@
     'me.x':0,'me.z':1,'me.heading':2,'me.turret':3,'me.hp':4,'me.maxHp':5,
     'me.blocked':6,'me.wallHit':7,'me.robotHit':8,'me.hitAngle':9,
     'world.arena':10,'world.time':11,'world.radarRange':12,
+    'world.howitzer.ready':13,'world.howitzer.maxRange':14,
+    'radio.tipX':15,'radio.tipZ':16,
     'scan.friendly':20,'scan.dist':21,'scan.angle':22,
   };
 
@@ -111,6 +113,7 @@
   const OUTPUT = {
     'out.moveX':0,'out.moveZ':1,'out.speed':2,'out.aim':3,'out.fire':4,
     'out.howitzerX':5,'out.howitzerZ':6,
+    'out.radioX':7,'out.radioZ':8,
   };
 
   // ---- Compiler ----
@@ -286,11 +289,12 @@
       if (tok.t === T.IDENT) {
         const name = adv().v;
 
-        // Dotted access: me.x, out.aim, scan.dist, world.time …
+        // Dotted access: me.x, out.aim, scan.dist, world.time,
+        // world.howitzer.ready, … (up to two dots supported)
         if (chk(T.DOT)) {
           adv();
-          const field = eat(T.IDENT).v;
-          const q = `${name}.${field}`;
+          let q = `${name}.${eat(T.IDENT).v}`;
+          if (chk(T.DOT)) { adv(); q = `${q}.${eat(T.IDENT).v}`; }
           if (q in SENSOR) return SENSOR_BASE + SENSOR[q];  // direct reg ref, no copy
           if (q in OUTPUT) return OUTPUT_BASE + OUTPUT[q];   // output reg is readable too
           fail(`Unknown field '${q}'`);
