@@ -692,7 +692,7 @@ function fire(r) {
   const ddx = ax - bx, ddz = az - bz, dd = Math.hypot(ddx, ddz);
   bullets.push({
     x: bx, y: 1.4, z: bz, x0: bx, z0: bz,
-    vx: (ddx / dd) * BULLET_SPEED, vz: (ddz / dd) * BULLET_SPEED, owner: r, color: r.color, life: 2.5,
+    vx: (ddx / dd) * BULLET_SPEED, vz: (ddz / dd) * BULLET_SPEED, owner: r, color: r.color, life: RADAR_RANGE / BULLET_SPEED,
   });
 }
 
