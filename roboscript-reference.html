@@ -144,7 +144,7 @@
   <a href="#radio">Radio</a>
   <a href="#functions">Built-in functions</a>
   <a href="#userfunctions">User functions</a>
-  <a href="#memory">Persistent memory</a>
+  <a href="#memory">Persistent memory (mem[], arr)</a>
   <a href="#tutorial">Tutorial</a>
   <a href="#examples">Examples</a>
 </nav>
@@ -161,7 +161,7 @@
 </p>
 <ul>
   <li>Regular variables are <strong>reset to 0</strong> at the start of every frame.</li>
-  <li><code>mem[0]</code>…<code>mem[63]</code> <strong>persist</strong> across frames — use them for state.</li>
+  <li><code>mem[0]</code>…<code>mem[63]</code> and named <code>arr</code> arrays <strong>persist</strong> across frames — use them for state.</li>
   <li>You have a budget of <strong>4 000 instructions per frame</strong>. If your code
       takes longer, execution is cut off and the last written outputs are used.</li>
   <li>All values are <strong>floating-point numbers</strong>. There are no strings, booleans,
@@ -181,7 +181,7 @@ angle = me.turret + 0.1
 count = count + 1   -- note: count resets to 0 each frame! use mem[] for counters
 </code></pre>
 <p>Variable names are case-sensitive, start with a letter or <code>_</code>, and may contain letters, digits, and underscores.</p>
-<div class="warn"><strong>Remember:</strong> plain variables reset to 0 each frame. Only <code>mem[0]</code>…<code>mem[63]</code> remember their values from one frame to the next.</div>
+<div class="warn"><strong>Remember:</strong> plain variables reset to 0 each frame. Only <code>mem[]</code> and named <code>arr</code> arrays remember their values from one frame to the next.</div>
 </section>
 
 <!-- ===== Operators ===== -->
@@ -567,24 +567,57 @@ mem[0] = mem[0] + 0.1
 
 <!-- ===== Memory ===== -->
 <section id="memory">
-<h2>Persistent memory — mem[0]…mem[63]</h2>
+<h2>Persistent memory</h2>
 <p>
-  <code>mem[0]</code> through <code>mem[63]</code> survive between frames. Use them to remember:
-  radar sweep position, movement goals, last-seen enemy data, timers, and anything
-  else that must persist across the 60-fps execution cycle.
+  The persistent store has 256 float entries that survive between frames.
+  It is split into two parts:
 </p>
-<p>The index must be a literal integer — no expressions or variables as indices.</p>
-<pre><code>-- mem[0] = radar sweep angle (advances each frame)
-mem[0] = mem[0] + 0.08
+<ul>
+  <li><strong><code>mem[0]</code>…<code>mem[63]</code></strong> — 64 individually-named slots for scalar state
+      (radar angle, movement goal, timers, enemy data, …).  Use a literal integer index.</li>
+  <li><strong>Named arrays</strong> — blocks of any size declared with <code>arr name[n]</code>,
+      for history buffers, regression windows, and anything needing a loop index.</li>
+</ul>
 
--- mem[1], mem[2] = movement target
-mem[1] = 5.0
-mem[2] = -3.0
-out.moveX = mem[1]
-out.moveZ  = mem[2]
+<h3>mem[] — scalar persistent slots</h3>
+<p>
+  A literal index accesses persistent storage directly.
+  A variable index (<code>mem[i]</code> where <code>i</code> is a variable) also works and
+  accesses the same 256-entry space at runtime — useful for manual ring buffers.
+</p>
+<pre><code>mem[0] = mem[0] + 0.08   -- radar sweep angle
+
+-- dynamic access (ring buffer head at variable i):
+i = (i + 1) % 8
+mem[i] = world.time
 </code></pre>
-<div class="tip"><strong>Tip:</strong> 64 floats is enough for most bots. Suggested layout:
-<code>mem[0]</code> = radar angle, <code>mem[1..2]</code> = movement goal, <code>mem[3]</code> = last-sighting time.</div>
+
+<h3>Named arrays — arr name[n]</h3>
+<p>
+  Declare a named array at the top level of your script.
+  Arrays are allocated in the persistent store starting at offset 64,
+  so they never overlap with <code>mem[0..63]</code>.
+  A script may declare as many arrays as fit in the remaining 192 slots.
+</p>
+<pre><code>arr win[30]    -- 30-entry sliding window (offsets 64..93)
+arr trail[40]  -- 40-entry trail buffer   (offsets 94..133)
+
+-- write with literal or variable index:
+win[0] = world.time
+i = (i + 1) % 30
+win[i] = me.x
+
+-- read:
+oldest = win[head]
+</code></pre>
+<p>
+  Literal indices are bounds-checked at compile time.
+  Variable indices are clamped at runtime so an out-of-range access
+  reads 0 and writes are silently dropped (no crash, no corruption).
+</p>
+<div class="tip"><strong>Typical layout:</strong>
+<code>mem[0..24]</code> for scalars matching the old 25-slot ingwa layout,
+then <code>arr</code> for any history buffer.</div>
 </section>
 
 <!-- ===== Tutorial ===== -->

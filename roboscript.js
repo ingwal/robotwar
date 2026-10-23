@@ -3,22 +3,31 @@
 //
 // Bytecode format: flat array of JS numbers, two words per instruction.
 //   word 0 (integer): op | (dst << 8) | (a << 16) | (b << 24)
-//   word 1 (float):   immediate value (used by LDF; jump target pc for JMP/JNZ/JZ)
+//   word 1 (float):   immediate value (used by LDF; jump target pc for JMP/JNZ/JZ;
+//                     persistent-store index for MLDS/MSTS; base offset for MGET/MSET)
 //
 // Register map (256 floats):
-//   0 – 63   persistent mem[]  (saved to / restored from me.mem._vmem each frame)
-//   64 – 127 temporaries       (zeroed at the start of each frame)
+//   0 – 123  user variables and temporaries (zeroed at the start of each frame)
+//   124 – 127 function return value registers
 //   128 – 191 sensor registers (read-only; loaded from me / world each frame)
 //   192 – 255 output registers (written by WRO; consumed at frame end)
+//
+// Persistent store (separate Float64Array, 256 entries):
+//   0 –  63  mem[0..63]  — accessed by MLDS/MSTS with literal index
+//   64 – 255  named arrays — allocated by 'arr name[n]' declarations
+//   Access: MLDS dst,k  reg[dst]=P[k]   MSTS src,k  P[k]=reg[src]
+//           MGET dst,idx,base  reg[dst]=P[reg[idx]+base]
+//           MSET idx,src,base  P[reg[idx]+base]=reg[src]
 //
 // Exposes: RoboScript.{ makeInterpreter, register, validateBytecode, OP, SID, OID }
 
 (function (global) {
   'use strict';
 
-  const BUDGET         = 4000;  // max instructions executed per frame
-  const MEM_SIZE       = 64;    // persistent registers
-  const SENSOR_BASE    = 128;
+  const BUDGET          = 4000;  // max instructions executed per frame
+  const PERSISTENT_SIZE = 256;   // entries in the persistent store (mem[] + named arrays)
+  const SENSOR_BASE     = 128;
+  const MEM_LIMIT       = 64;    // highest mem[] index + 1 (mem[0..63])
   const OUTPUT_BASE    = 192;
   const RETURN_BASE    = 124;   // function return value registers 124-127
   const MAX_CALL_DEPTH = 10;
@@ -62,6 +71,7 @@
     AND: 0x26, OR:  0x27, NOT: 0x28,
     JMP: 0x30, JNZ: 0x31, JZ:  0x32, CALL: 0x33, RET: 0x34,
     SCN: 0x40, WLD: 0x41, RDS: 0x42, WRO: 0x43,
+    MLDS: 0x44, MSTS: 0x45, MGET: 0x46, MSET: 0x47,
     HLT: 0xFF,
   };
   const VALID_OPS = new Set(Object.values(OP));
@@ -77,14 +87,13 @@
       name,
       description,
       think(me, world) {
-        // Restore persistent memory from the previous frame.
+        // Persistent store: separate from the register file; accessed via MLDS/MSTS/MGET/MSET.
         const isFirstFrame = !me.mem._vmem;
-        const vmem = me.mem._vmem ?? (me.mem._vmem = new Float64Array(MEM_SIZE));
-        for (let i = 0; i < MEM_SIZE; i++) reg[i] = vmem[i];
+        const persistent = me.mem._vmem ?? (me.mem._vmem = new Float64Array(PERSISTENT_SIZE));
 
-        // Zero temporaries so stale values don't leak between robots that
-        // share this interpreter instance within the same frame.
-        reg.fill(0, MEM_SIZE, SENSOR_BASE);
+        // Zero all local registers so stale values don't leak between robots
+        // that share this interpreter instance within the same frame.
+        reg.fill(0, 0, SENSOR_BASE);
 
         // Load sensor registers.
         reg[SENSOR_BASE + SID.ME_X]        = me.x;
@@ -237,13 +246,16 @@
             case OP.RDS: reg[dst] = reg[SENSOR_BASE + a]; break;
             case OP.WRO: reg[OUTPUT_BASE + dst] = reg[a]; break;
 
+            // Persistent store access
+            case OP.MLDS: reg[dst] = persistent[imm | 0]; break;
+            case OP.MSTS: persistent[imm | 0] = reg[a]; break;
+            case OP.MGET: { const pi = ((reg[a] | 0) + (imm | 0)); reg[dst] = (pi >= 0 && pi < PERSISTENT_SIZE) ? persistent[pi] : 0; break; }
+            case OP.MSET: { const pi = ((reg[a] | 0) + (imm | 0)); if (pi >= 0 && pi < PERSISTENT_SIZE) persistent[pi] = reg[b]; break; }
+
             case OP.HLT: pc = len; break;
             default:     pc = len; break;  // unknown opcode → halt
           }
         }
-
-        // Save persistent memory for next frame.
-        for (let i = 0; i < MEM_SIZE; i++) vmem[i] = reg[i];
 
         // Build the output object the game engine expects.
         const hx = reg[OUTPUT_BASE + OID.HOW_X];
@@ -296,6 +308,8 @@
         return `RDS sensor id ${a} out of range at instruction ${i / 2}`;
       if (op === OP.WRO && dst >= 12)
         return `WRO output id ${dst} out of range at instruction ${i / 2}`;
+      if ((op === OP.MLDS || op === OP.MSTS) && ((imm | 0) < 0 || (imm | 0) >= PERSISTENT_SIZE))
+        return `persistent store index ${imm | 0} out of range at instruction ${i / 2}`;
     }
     return null;
   }

@@ -10,10 +10,15 @@
 //   Odd  indices: float immediate (literal value, or jump target word-index)
 //
 // Register assignment:
-//   0 – 63   mem[0..63]   (persistent; written back to me.mem each frame)
-//   64 – 127 user vars + temporaries  (vars grow upward from 64; temps fill above)
+//   0 – 123  user vars + temporaries  (vars grow upward from 0; temps fill above)
+//   124 – 127 function return value registers
 //   128 – 191 sensor registers        (read-only; compiler returns these by index)
 //   192 – 255 output registers        (written via WRO opcode)
+//
+// Persistent store (separate 256-entry Float64Array, not the register file):
+//   0 –  63  mem[0..63] — MLDS/MSTS with literal index
+//   64 – 255 named arrays — allocated by 'arr name[n]' declarations
+//   Dynamic mem[expr] and name[expr] use MGET/MSET with a register index.
 
 (function (global) {
   'use strict';
@@ -30,6 +35,7 @@
     BREAK:'break', CONTINUE:'continue',
     AND:'and', OR:'or', NOT:'not',
     FUNCTION:'function', RETURN:'return',
+    ARR:'arr',
     EOF:'EOF',
   };
 
@@ -37,6 +43,7 @@
     'if','then','elseif','else','end','while','do','loop',
     'break','continue','and','or','not',
     'function','return',
+    'arr',
   ]);
 
   // ---- Lexer ----
@@ -95,7 +102,9 @@
     MIN:0x10,MAX:0x11,RND:0x12,ISN:0x13,
     CEQ:0x20,CNE:0x21,CLT:0x22,CLE:0x23,CGT:0x24,CGE:0x25,AND:0x26,OR:0x27,NOT:0x28,
     JMP:0x30,JNZ:0x31,JZ:0x32,CALL:0x33,RET:0x34,
-    SCN:0x40,WLD:0x41,RDS:0x42,WRO:0x43,HLT:0xFF,
+    SCN:0x40,WLD:0x41,RDS:0x42,WRO:0x43,
+    MLDS:0x44,MSTS:0x45,MGET:0x46,MSET:0x47,
+    HLT:0xFF,
   };
 
   const SENSOR_BASE  = 128;
@@ -133,13 +142,18 @@
     try { toks = lex(source); }
     catch (e) { return { bytecode: null, vars: null, error: e.message }; }
 
+    const PERSISTENT_SIZE = 256;  // must match roboscript.js
+    const MEM_LIMIT       = 64;   // highest allowed mem[] literal index + 1
+
     const code    = [];   // flat bytecode array
     const vars    = {};   // varName → register number
-    let nextVar   = 64;   // next unused variable register (grows up from 64)
-    let tempNext  = 64;   // temporary register watermark (reset per statement)
+    let nextVar   = 0;    // next unused variable register (grows up from 0)
+    let tempNext  = 0;    // temporary register watermark (reset per statement)
     const loops   = [];   // loop-context stack { breaks:[], cont:number }
     const funcs   = {};   // funcName → { startPC, numParams, numReturns, frameBase }
     let currentFn = null; // non-null while compiling a function body
+    const arrays  = {};   // arrName → { base, size }
+    let arrNext   = MEM_LIMIT;  // next free offset in persistent store for named arrays
 
     let pos = 0;
     const peek  = ()  => toks[pos];
@@ -359,15 +373,37 @@
           fail(`Unknown function '${name}'`);
         }
 
-        // mem[i] read — index must be a compile-time integer literal 0..63
-        if (name === 'mem') {
-          eat(T.LB);
-          const itok = eat(T.NUM);
-          const idx = itok.v | 0;
-          if (!Number.isInteger(itok.v) || idx < 0 || idx >= 64)
-            fail(`mem index must be an integer 0..63`);
-          eat(T.RB);
-          return idx;  // mem[i] lives at register i — no instruction needed
+        // mem[i] read — literal index 0..63: MLDS; expression index: MGET
+        if (name === 'mem' && chk(T.LB)) {
+          adv();
+          if (chk(T.NUM) && toks[pos + 1]?.t === T.RB) {
+            const itok = eat(T.NUM);
+            const idx = itok.v | 0;
+            if (!Number.isInteger(itok.v) || idx < 0 || idx >= MEM_LIMIT)
+              fail(`mem index must be an integer 0..${MEM_LIMIT - 1}`);
+            eat(T.RB);
+            const d = allocTmp(); emit(OP.MLDS, d, 0, 0, idx); return d;
+          } else {
+            const idxReg = expr(); eat(T.RB);
+            const d = allocTmp(); emit(OP.MGET, d, idxReg, 0, 0); return d;
+          }
+        }
+
+        // Named array read — arr[literal]: MLDS(base+k); arr[expr]: MGET(base)
+        if (chk(T.LB) && name in arrays) {
+          adv();
+          const arr = arrays[name];
+          if (chk(T.NUM) && toks[pos + 1]?.t === T.RB) {
+            const itok = eat(T.NUM);
+            const k = itok.v | 0;
+            if (!Number.isInteger(itok.v) || k < 0 || k >= arr.size)
+              fail(`index ${k} out of bounds for '${name}[${arr.size}]'`);
+            eat(T.RB);
+            const d = allocTmp(); emit(OP.MLDS, d, 0, 0, arr.base + k); return d;
+          } else {
+            const idxReg = expr(); eat(T.RB);
+            const d = allocTmp(); emit(OP.MGET, d, idxReg, 0, arr.base); return d;
+          }
         }
 
         // Plain variable (auto-declared on first use)
@@ -394,6 +430,7 @@
       else if (tok.t === T.BREAK)    { adv(); stmtBreak(); }
       else if (tok.t === T.CONTINUE) { adv(); stmtContinue(); }
       else if (tok.t === T.RETURN)   { adv(); stmtReturn(); }
+      else if (tok.t === T.ARR)      { adv(); compileArrayDef(); }
       else if (tok.t === T.IDENT)    { stmtAssign(); }
       else fail(`Expected statement, got '${tok.t}'`);
       endStmt();
@@ -568,17 +605,42 @@
         return;
       }
 
-      // mem[i] = expr
+      // mem[i] = expr — literal index: MSTS; expression index: MSET
       if (name === 'mem' && chk(T.LB)) {
         adv();
-        const itok = eat(T.NUM);
-        const idx = itok.v | 0;
-        if (!Number.isInteger(itok.v) || idx < 0 || idx >= 64)
-          fail(`mem index must be an integer 0..63`);
-        eat(T.RB);
-        eat(T.ASSIGN);
-        const r = expr();
-        if (idx !== r) emit(OP.MOV, idx, r, 0);
+        if (chk(T.NUM) && toks[pos + 1]?.t === T.RB) {
+          const itok = eat(T.NUM);
+          const idx = itok.v | 0;
+          if (!Number.isInteger(itok.v) || idx < 0 || idx >= MEM_LIMIT)
+            fail(`mem index must be an integer 0..${MEM_LIMIT - 1}`);
+          eat(T.RB); eat(T.ASSIGN);
+          const r = expr();
+          emit(OP.MSTS, 0, r, 0, idx);
+        } else {
+          const idxReg = expr(); eat(T.RB); eat(T.ASSIGN);
+          const r = expr();
+          emit(OP.MSET, 0, idxReg, r, 0);
+        }
+        return;
+      }
+
+      // arr[i] = expr — literal index: MSTS(base+k); expression index: MSET(base)
+      if (chk(T.LB) && name in arrays) {
+        adv();
+        const arr = arrays[name];
+        if (chk(T.NUM) && toks[pos + 1]?.t === T.RB) {
+          const itok = eat(T.NUM);
+          const k = itok.v | 0;
+          if (!Number.isInteger(itok.v) || k < 0 || k >= arr.size)
+            fail(`index ${k} out of bounds for '${name}[${arr.size}]'`);
+          eat(T.RB); eat(T.ASSIGN);
+          const r = expr();
+          emit(OP.MSTS, 0, r, 0, arr.base + k);
+        } else {
+          const idxReg = expr(); eat(T.RB); eat(T.ASSIGN);
+          const r = expr();
+          emit(OP.MSET, 0, idxReg, r, arr.base);
+        }
         return;
       }
 
@@ -619,9 +681,26 @@
       if (vr !== r) emit(OP.MOV, vr, r, 0);
     }
 
+    // ---- Array declarations ----
+    function compileArrayDef() {
+      if (currentFn) fail("'arr' declarations must be at the top level, not inside a function");
+      const name = eat(T.IDENT).v;
+      if (name in arrays) fail(`Duplicate array declaration '${name}'`);
+      if (name in vars)   fail(`'${name}' is already declared as a variable`);
+      eat(T.LB);
+      const sizeTok = eat(T.NUM);
+      const size = sizeTok.v | 0;
+      if (!Number.isInteger(sizeTok.v) || size < 1) fail('array size must be a positive integer');
+      eat(T.RB);
+      if (arrNext + size > PERSISTENT_SIZE)
+        fail(`array '${name}[${size}]' exceeds persistent storage (${PERSISTENT_SIZE - arrNext} slots remaining)`);
+      arrays[name] = { base: arrNext, size };
+      arrNext += size;
+    }
+
     // ---- Top-level ----
-    // Function definitions come first; a single JMP at the start of bytecode
-    // skips over all function bodies so they're not executed inline.
+    // Function definitions and array declarations emit no main-body code and can
+    // appear freely; a single JMP at the start of bytecode skips function bodies.
     try {
       let mainJmpSlot = -1;
       while (!chk(T.EOF)) {
@@ -629,6 +708,9 @@
           if (mainJmpSlot < 0) mainJmpSlot = emitJMP(0);
           adv();
           compileFunctionDef();
+        } else if (peek().t === T.ARR) {
+          adv();
+          compileArrayDef();
         } else {
           if (mainJmpSlot >= 0) { patch(mainJmpSlot, curPC()); mainJmpSlot = -1; }
           stmt();
@@ -636,7 +718,7 @@
       }
       if (mainJmpSlot >= 0) patch(mainJmpSlot, curPC());
       emit(OP.HLT, 0, 0, 0, 0);
-      return { bytecode: code, vars, error: null };
+      return { bytecode: code, vars, arrays, error: null };
     } catch (e) {
       return { bytecode: null, vars: null, error: e.message };
     }
