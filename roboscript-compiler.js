@@ -277,7 +277,7 @@
     }
 
     // One-arg math builtins → emit unary instruction
-    const UNI = { sin:OP.SIN, cos:OP.COS, sqrt:OP.SQT, abs:OP.ABS, floor:OP.FLR, wallDist:OP.WLD };
+    const UNI = { sin:OP.SIN, cos:OP.COS, sqrt:OP.SQT, abs:OP.ABS, floor:OP.FLR, wallDist:OP.WLD, isnan:OP.ISN };
     // Two-arg builtins → emit binary instruction
     const BIN = { min:OP.MIN, max:OP.MAX, atan2:OP.AT2, scan:OP.SCN };
 

@@ -57,7 +57,7 @@
     MOV: 0x01, LDF: 0x02,
     ADD: 0x03, SUB: 0x04, MUL: 0x05, DIV: 0x06, MOD: 0x07, POW: 0x08,
     NEG: 0x09, SIN: 0x0A, COS: 0x0B, AT2: 0x0C, SQT: 0x0D,
-    ABS: 0x0E, FLR: 0x0F, MIN: 0x10, MAX: 0x11, RND: 0x12,
+    ABS: 0x0E, FLR: 0x0F, MIN: 0x10, MAX: 0x11, RND: 0x12, ISN: 0x13,
     CEQ: 0x20, CNE: 0x21, CLT: 0x22, CLE: 0x23, CGT: 0x24, CGE: 0x25,
     AND: 0x26, OR:  0x27, NOT: 0x28,
     JMP: 0x30, JNZ: 0x31, JZ:  0x32, CALL: 0x33, RET: 0x34,
@@ -110,12 +110,15 @@
         // Position broadcasts use a 3-second rolling window so bots see all
         // recent teammate positions, not just the one that happened to arrive
         // this frame — matching JS bot behaviour with their teamPos arrays.
+        // Radio coordinate sensors use NaN as "no value" — distinguishes "not received"
+        // from a legitimate position at (0,0). Use isnan() to check for a value.
+        // radio.deathTeamId stays 0 for "no death" since team IDs are always > 0.
         const posWin = me.mem._posWin ?? (me.mem._posWin = []);
-        let _rTipX = 0, _rTipZ = 0, _rTipVX = 0, _rTipVZ = 0;
-        let _rDeathTeam = 0, _rDeathX = 0, _rDeathZ = 0;
+        let _rTipArrived = false, _rTipX = 0, _rTipZ = 0, _rTipVX = 0, _rTipVZ = 0;
+        let _rDeathTeam = 0, _rDeathX = NaN, _rDeathZ = NaN;
         if (world.radio) {
           for (const msg of world.radio.inbox) {
-            if (msg.type === 'enemy'   && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; _rTipVX = msg.vx ?? 0; _rTipVZ = msg.vz ?? 0; }
+            if (msg.type === 'enemy'   && !_rTipArrived) { _rTipArrived = true; _rTipX = msg.x; _rTipZ = msg.z; _rTipVX = msg.vx ?? 0; _rTipVZ = msg.vz ?? 0; }
             if (msg.type === 'position') posWin.push({ x: msg.x, z: msg.z, t: world.time });
             if (msg.type === 'death'   && _rDeathTeam === 0) {
               _rDeathTeam = msg.teamId ?? 0; _rDeathX = msg.x ?? 0; _rDeathZ = msg.z ?? 0;
@@ -127,16 +130,16 @@
         while (_ptrim < posWin.length && posWin[_ptrim].t < world.time - 3) _ptrim++;
         if (_ptrim > 0) posWin.splice(0, _ptrim);
         const _pw = posWin;
-        reg[SENSOR_BASE + SID.RADIO_TIP_X]      = _rTipX;
-        reg[SENSOR_BASE + SID.RADIO_TIP_Z]      = _rTipZ;
-        reg[SENSOR_BASE + SID.RADIO_TIP_VX]     = _rTipVX;
-        reg[SENSOR_BASE + SID.RADIO_TIP_VZ]     = _rTipVZ;
-        reg[SENSOR_BASE + SID.RADIO_POS_X]      = _pw.length > 0 ? _pw[_pw.length - 1].x : 0;
-        reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _pw.length > 0 ? _pw[_pw.length - 1].z : 0;
-        reg[SENSOR_BASE + SID.RADIO_POS2_X]     = _pw.length > 1 ? _pw[_pw.length - 2].x : 0;
-        reg[SENSOR_BASE + SID.RADIO_POS2_Z]     = _pw.length > 1 ? _pw[_pw.length - 2].z : 0;
-        reg[SENSOR_BASE + SID.RADIO_POS3_X]     = _pw.length > 2 ? _pw[_pw.length - 3].x : 0;
-        reg[SENSOR_BASE + SID.RADIO_POS3_Z]     = _pw.length > 2 ? _pw[_pw.length - 3].z : 0;
+        reg[SENSOR_BASE + SID.RADIO_TIP_X]      = _rTipArrived ? _rTipX  : NaN;
+        reg[SENSOR_BASE + SID.RADIO_TIP_Z]      = _rTipArrived ? _rTipZ  : NaN;
+        reg[SENSOR_BASE + SID.RADIO_TIP_VX]     = _rTipArrived ? _rTipVX : NaN;
+        reg[SENSOR_BASE + SID.RADIO_TIP_VZ]     = _rTipArrived ? _rTipVZ : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS_X]      = _pw.length > 0 ? _pw[_pw.length - 1].x : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _pw.length > 0 ? _pw[_pw.length - 1].z : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS2_X]     = _pw.length > 1 ? _pw[_pw.length - 2].x : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS2_Z]     = _pw.length > 1 ? _pw[_pw.length - 2].z : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS3_X]     = _pw.length > 2 ? _pw[_pw.length - 3].x : NaN;
+        reg[SENSOR_BASE + SID.RADIO_POS3_Z]     = _pw.length > 2 ? _pw[_pw.length - 3].z : NaN;
         reg[SENSOR_BASE + SID.RADIO_DEATH_TEAM] = _rDeathTeam;
         reg[SENSOR_BASE + SID.RADIO_DEATH_X]    = _rDeathX;
         reg[SENSOR_BASE + SID.RADIO_DEATH_Z]    = _rDeathZ;
@@ -192,6 +195,7 @@
             case OP.MIN: reg[dst] = Math.min(reg[a], reg[b]); break;
             case OP.MAX: reg[dst] = Math.max(reg[a], reg[b]); break;
             case OP.RND: reg[dst] = Math.random(); break;
+            case OP.ISN: reg[dst] = Number.isNaN(reg[a]) ? 1 : 0; break;
 
             // Comparisons (produce 0.0 or 1.0)
             case OP.CEQ: reg[dst] = reg[a] === reg[b] ? 1 : 0; break;
