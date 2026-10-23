@@ -274,6 +274,7 @@ end
   <tr><td>me.wallHit</td><td>1 if touching a wall this frame, else 0.</td></tr>
   <tr><td>me.robotHit</td><td>1 if touching another robot this frame, else 0.</td></tr>
   <tr><td>me.hitAngle</td><td>Angle toward the colliding object (radians).</td></tr>
+  <tr><td>me.teamId</td><td>The robot's team ID. 0 in free-for-all battles.</td></tr>
 </table>
 
 <h3>World state</h3>
@@ -284,6 +285,7 @@ end
   <tr><td>world.radarRange</td><td>Maximum scan range.</td></tr>
   <tr><td>world.howitzer.ready</td><td>1 when the howitzer has finished reloading, 0 while cooling down (5 s cooldown).</td></tr>
   <tr><td>world.howitzer.maxRange</td><td>Maximum howitzer range in world units (typically 40). Target must also be at least 1 unit away.</td></tr>
+  <tr><td>world.bulletSpeed</td><td>Bullet travel speed in world units/second (typically 18). Use this for lead-shot calculations.</td></tr>
 </table>
 
 <h3>Radio (received this frame — teams only)</h3>
@@ -291,8 +293,13 @@ end
   <tr><th>Name</th><th>Description</th></tr>
   <tr><td>radio.tipX</td><td>X coordinate of the latest enemy-sighting broadcast received from a teammate this frame. 0 if no tip arrived or radio is off.</td></tr>
   <tr><td>radio.tipZ</td><td>Z coordinate of that tip.</td></tr>
+  <tr><td>radio.posX</td><td>X coordinate of the most recent own-position broadcast received from a teammate this frame. 0 if none arrived or radio is off.</td></tr>
+  <tr><td>radio.posZ</td><td>Z coordinate of that broadcast.</td></tr>
+  <tr><td>radio.deathTeamId</td><td>Team ID of the most recent robot that died this frame (0 if none). Death events are sent to every robot in the battle, not just teammates.</td></tr>
+  <tr><td>radio.deathX</td><td>X position where that robot died.</td></tr>
+  <tr><td>radio.deathZ</td><td>Z position where that robot died.</td></tr>
 </table>
-<p>Both values reset to 0 every frame. To use a tip across frames, copy it to <code>mem[]</code> when it is non-zero.</p>
+<p>All radio values reset to 0 every frame. Copy anything you need to keep into <code>mem[]</code>.</p>
 
 <h3>Scan results (set by <code>scan()</code>)</h3>
 <table>
@@ -321,6 +328,7 @@ end
   <tr><td>out.howitzerZ</td><td>NaN</td><td>Fire the howitzer at this Z coordinate.</td></tr>
   <tr><td>out.radioX</td><td>NaN</td><td>Broadcast an enemy sighting at this X to teammates (must set both X and Z). No effect in solo or radio-off battles.</td></tr>
   <tr><td>out.radioZ</td><td>NaN</td><td>Z coordinate of the enemy sighting to broadcast.</td></tr>
+  <tr><td>out.sendPos</td><td>0</td><td>Set non-zero to broadcast your own position to all teammates this frame. Teammates receive it as <code>radio.posX</code> / <code>radio.posZ</code>. No effect in free-for-all or radio-disabled battles.</td></tr>
 </table>
 <div class="tip"><strong>Tip:</strong> Angles use the convention 0 = +Z axis (north), increasing clockwise.
 To aim at a world position <code>(px, pz)</code> from your position:
@@ -364,38 +372,63 @@ with radar shots — corners, robots behind walls, or enemies spotted via radio.
 <h2>Radio (teams only)</h2>
 <p>
   In team battles with radio enabled, robots on the same team share a
-  radio channel.  RoboScript exposes a simple tip-passing interface:
+  radio channel.  RoboScript exposes three message types:
 </p>
+<h3>Enemy sightings</h3>
 <ul>
-  <li><strong>Receive:</strong> <code>radio.tipX</code> / <code>radio.tipZ</code> — the X/Z of
-      the latest enemy-sighting broadcast sent by a teammate <em>this frame</em>.
-      Both are 0 if no tip arrived or radio is off.</li>
-  <li><strong>Send:</strong> set <code>out.radioX</code> and <code>out.radioZ</code> to
-      broadcast an enemy position to all teammates this frame.</li>
+  <li><strong>Send:</strong> set <code>out.radioX</code> and <code>out.radioZ</code> to broadcast an enemy position.</li>
+  <li><strong>Receive:</strong> <code>radio.tipX</code> / <code>radio.tipZ</code> — the X/Z of the latest enemy-sighting sent by a teammate <em>this frame</em>. Both are 0 if none arrived.</li>
+</ul>
+<h3>Position broadcasts (dispersion)</h3>
+<ul>
+  <li><strong>Send:</strong> set <code>out.sendPos</code> to a non-zero value to broadcast your current position.</li>
+  <li><strong>Receive:</strong> <code>radio.posX</code> / <code>radio.posZ</code> — most recent teammate position received this frame. Use this to spread out and avoid clustering.</li>
+</ul>
+<h3>Death events</h3>
+<ul>
+  <li><strong>Receive only</strong> — the game engine sends a death event to <em>every</em> robot (not just teammates) when any robot dies.</li>
+  <li><code>radio.deathTeamId</code> — team ID of the robot that died (0 if no death this frame).</li>
+  <li><code>radio.deathX</code> / <code>radio.deathZ</code> — where it died.</li>
+  <li>Compare with <code>me.teamId</code> to distinguish friendly from enemy deaths.</li>
 </ul>
 <p>
-  Because tips reset to 0 every frame, copy a received tip into <code>mem[]</code>
-  immediately and track its age with <code>world.time</code>.
+  All radio values reset to 0 every frame. Copy anything you need to keep into <code>mem[]</code>.
 </p>
-<pre><code>-- Broadcast enemy position when we spot one
-if d > 0 then
-  out.radioX = me.x + sin(mem[0]) * d
+<pre><code>-- ---- Enemy tip ----
+if d &gt; 0 then
+  out.radioX = me.x + sin(mem[0]) * d   -- broadcast enemy position
   out.radioZ = me.z + cos(mem[0]) * d
 end
-
--- Store incoming tips in persistent memory
 if radio.tipX != 0 then
-  mem[20] = radio.tipX
+  mem[20] = radio.tipX   -- cache the tip
   mem[21] = radio.tipZ
-  mem[22] = world.time   -- when we received it
 end
 
--- Use tip only while fresh (< 4 s old), and only when we lack our own fix
-tipAge = world.time - mem[22]
-if tipAge < 4 and world.time - mem[5] > 1.5 then
-  -- steer toward tip position stored in mem[20], mem[21]
-  out.moveX = mem[20]
-  out.moveZ = mem[21]
+-- ---- Position broadcast (every 2 s) ----
+if world.time - mem[22] &gt; 2.0 then
+  out.sendPos = 1
+  mem[22] = world.time
+end
+
+-- ---- Teammate dispersion ----
+if radio.posX != 0 then
+  mem[23] = radio.posX
+  mem[24] = radio.posZ
+  mem[25] = world.time
+end
+if world.time - mem[25] &lt; 3.0 then
+  tdx = mem[23] - me.x
+  tdz = mem[24] - me.z
+  if tdx * tdx + tdz * tdz &lt; 144.0 then   -- teammate within 12 units
+    fleeAng = atan2(me.x - mem[23], me.z - mem[24])
+    out.moveX = me.x + sin(fleeAng) * 24.0
+    out.moveZ = me.z + cos(fleeAng) * 24.0
+  end
+end
+
+-- ---- Count enemy deaths for backup detection ----
+if radio.deathTeamId != 0 and radio.deathTeamId != me.teamId then
+  mem[26] = mem[26] + 1   -- enemy deaths so far
 end
 </code></pre>
 <div class="warn"><strong>Note:</strong> Radio has no effect in free-for-all (non-teams) battles or when

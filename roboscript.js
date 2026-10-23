@@ -31,7 +31,10 @@
     ARENA: 10, TIME: 11, RADAR_RANGE: 12,
     HOW_READY: 13, HOW_MAX_RANGE: 14,
     RADIO_TIP_X: 15, RADIO_TIP_Z: 16,
+    ME_TEAM_ID: 17, BULLET_SPEED: 18,
     SCAN_FRIENDLY: 20, SCAN_DIST: 21, SCAN_ANGLE: 22,
+    RADIO_POS_X: 23, RADIO_POS_Z: 24,
+    RADIO_DEATH_TEAM: 25, RADIO_DEATH_X: 26, RADIO_DEATH_Z: 27,
   };
 
   // ---- Output IDs (used with WRO) ----
@@ -41,6 +44,7 @@
     MOVE_X: 0, MOVE_Z: 1, SPEED: 2, AIM: 3, FIRE: 4,
     HOW_X: 5, HOW_Z: 6,
     RADIO_X: 7, RADIO_Z: 8,
+    RADIO_SEND_POS: 9,
   };
 
   // ---- Opcodes ----
@@ -92,16 +96,30 @@
         reg[SENSOR_BASE + SID.RADAR_RANGE] = world.radarRange;
         reg[SENSOR_BASE + SID.HOW_READY]     = world.howitzer.ready ? 1 : 0;
         reg[SENSOR_BASE + SID.HOW_MAX_RANGE] = world.howitzer.maxRange;
+        reg[SENSOR_BASE + SID.ME_TEAM_ID]    = me.teamId  ?? 0;
+        reg[SENSOR_BASE + SID.BULLET_SPEED]  = world.bulletSpeed ?? 18;
 
-        // Radio: expose the freshest enemy-sighting tip received from a teammate
-        // this frame. 0/0 when radio is disabled or no tip arrived this frame.
+        // Radio: expose the freshest message of each type received this frame.
+        // All values are 0 when radio is disabled or no message of that type arrived.
         let _rTipX = 0, _rTipZ = 0;
+        let _rPosX = 0, _rPosZ = 0;
+        let _rDeathTeam = 0, _rDeathX = 0, _rDeathZ = 0;
         if (world.radio) {
-          for (const msg of world.radio.inbox)
-            if (msg.type === 'enemy') { _rTipX = msg.x; _rTipZ = msg.z; break; }
+          for (const msg of world.radio.inbox) {
+            if (msg.type === 'enemy'    && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; }
+            if (msg.type === 'position' && _rPosX      === 0) { _rPosX = msg.x; _rPosZ = msg.z; }
+            if (msg.type === 'death'    && _rDeathTeam === 0) {
+              _rDeathTeam = msg.teamId ?? 0; _rDeathX = msg.x ?? 0; _rDeathZ = msg.z ?? 0;
+            }
+          }
         }
-        reg[SENSOR_BASE + SID.RADIO_TIP_X] = _rTipX;
-        reg[SENSOR_BASE + SID.RADIO_TIP_Z] = _rTipZ;
+        reg[SENSOR_BASE + SID.RADIO_TIP_X]      = _rTipX;
+        reg[SENSOR_BASE + SID.RADIO_TIP_Z]      = _rTipZ;
+        reg[SENSOR_BASE + SID.RADIO_POS_X]      = _rPosX;
+        reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _rPosZ;
+        reg[SENSOR_BASE + SID.RADIO_DEATH_TEAM] = _rDeathTeam;
+        reg[SENSOR_BASE + SID.RADIO_DEATH_X]    = _rDeathX;
+        reg[SENSOR_BASE + SID.RADIO_DEATH_Z]    = _rDeathZ;
 
         // Default outputs.
         reg[OUTPUT_BASE + OID.MOVE_X]  = me.x;   // stay in place
@@ -111,8 +129,9 @@
         reg[OUTPUT_BASE + OID.FIRE]    = 0;
         reg[OUTPUT_BASE + OID.HOW_X]   = NaN;  // don't fire howitzer
         reg[OUTPUT_BASE + OID.HOW_Z]   = NaN;
-        reg[OUTPUT_BASE + OID.RADIO_X] = NaN;  // don't broadcast
-        reg[OUTPUT_BASE + OID.RADIO_Z] = NaN;
+        reg[OUTPUT_BASE + OID.RADIO_X]        = NaN;  // don't broadcast enemy tip
+        reg[OUTPUT_BASE + OID.RADIO_Z]        = NaN;
+        reg[OUTPUT_BASE + OID.RADIO_SEND_POS] = 0;    // don't broadcast position
 
         // Execute bytecode.
         const len = bytecode.length;
@@ -205,9 +224,11 @@
         const hz = reg[OUTPUT_BASE + OID.HOW_Z];
         const rx = reg[OUTPUT_BASE + OID.RADIO_X];
         const rz = reg[OUTPUT_BASE + OID.RADIO_Z];
-        // Send radio enemy tip if the bot set both RADIO_X and RADIO_Z.
+        // Send radio messages if requested.
         if (!Number.isNaN(rx) && !Number.isNaN(rz) && world.radio)
           world.radio.send({ type: 'enemy', x: rx, z: rz });
+        if (reg[OUTPUT_BASE + OID.RADIO_SEND_POS] !== 0 && world.radio)
+          world.radio.send({ type: 'position', x: me.x, z: me.z });
         const out = {
           moveTo: { x: reg[OUTPUT_BASE + OID.MOVE_X], z: reg[OUTPUT_BASE + OID.MOVE_Z] },
           speed:  reg[OUTPUT_BASE + OID.SPEED],
@@ -247,7 +268,7 @@
       }
       if (op === OP.RDS && a >= 64)
         return `RDS sensor id ${a} out of range at instruction ${i / 2}`;
-      if (op === OP.WRO && dst >= 9)
+      if (op === OP.WRO && dst >= 10)
         return `WRO output id ${dst} out of range at instruction ${i / 2}`;
     }
     return null;

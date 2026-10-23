@@ -109,7 +109,10 @@
     'world.arena':10,'world.time':11,'world.radarRange':12,
     'world.howitzer.ready':13,'world.howitzer.maxRange':14,
     'radio.tipX':15,'radio.tipZ':16,
+    'me.teamId':17,'world.bulletSpeed':18,
     'scan.friendly':20,'scan.dist':21,'scan.angle':22,
+    'radio.posX':23,'radio.posZ':24,
+    'radio.deathTeamId':25,'radio.deathX':26,'radio.deathZ':27,
   };
 
   // Output register offsets (written via WRO)
@@ -117,6 +120,7 @@
     'out.moveX':0,'out.moveZ':1,'out.speed':2,'out.aim':3,'out.fire':4,
     'out.howitzerX':5,'out.howitzerZ':6,
     'out.radioX':7,'out.radioZ':8,
+    'out.sendPos':9,
   };
 
   // ---- Compiler ----
