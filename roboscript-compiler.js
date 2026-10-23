@@ -113,6 +113,7 @@
     'scan.friendly':20,'scan.dist':21,'scan.angle':22,
     'radio.posX':23,'radio.posZ':24,
     'radio.deathTeamId':25,'radio.deathX':26,'radio.deathZ':27,
+    'radio.tipVX':28,'radio.tipVZ':29,
   };
 
   // Output register offsets (written via WRO)
@@ -121,6 +122,7 @@
     'out.howitzerX':5,'out.howitzerZ':6,
     'out.radioX':7,'out.radioZ':8,
     'out.sendPos':9,
+    'out.radioVX':10,'out.radioVZ':11,
   };
 
   // ---- Compiler ----

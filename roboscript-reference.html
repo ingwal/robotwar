@@ -293,6 +293,8 @@ end
   <tr><th>Name</th><th>Description</th></tr>
   <tr><td>radio.tipX</td><td>X coordinate of the latest enemy-sighting broadcast received from a teammate this frame. 0 if no tip arrived or radio is off.</td></tr>
   <tr><td>radio.tipZ</td><td>Z coordinate of that tip.</td></tr>
+  <tr><td>radio.tipVX</td><td>Enemy velocity X included in that tip (0 if the sender did not broadcast velocity or no tip arrived).</td></tr>
+  <tr><td>radio.tipVZ</td><td>Enemy velocity Z included in that tip.</td></tr>
   <tr><td>radio.posX</td><td>X coordinate of the most recent own-position broadcast received from a teammate this frame. 0 if none arrived or radio is off.</td></tr>
   <tr><td>radio.posZ</td><td>Z coordinate of that broadcast.</td></tr>
   <tr><td>radio.deathTeamId</td><td>Team ID of the most recent robot that died this frame (0 if none). Death events are sent to every robot in the battle, not just teammates.</td></tr>
@@ -328,6 +330,8 @@ end
   <tr><td>out.howitzerZ</td><td>NaN</td><td>Fire the howitzer at this Z coordinate.</td></tr>
   <tr><td>out.radioX</td><td>NaN</td><td>Broadcast an enemy sighting at this X to teammates (must set both X and Z). No effect in solo or radio-off battles.</td></tr>
   <tr><td>out.radioZ</td><td>NaN</td><td>Z coordinate of the enemy sighting to broadcast.</td></tr>
+  <tr><td>out.radioVX</td><td>0</td><td>Enemy velocity X to include in the broadcast. Teammates receive it as <code>radio.tipVX</code>. Optional — leave at 0 if you have no velocity estimate.</td></tr>
+  <tr><td>out.radioVZ</td><td>0</td><td>Enemy velocity Z to include in the broadcast.</td></tr>
   <tr><td>out.sendPos</td><td>0</td><td>Set non-zero to broadcast your own position to all teammates this frame. Teammates receive it as <code>radio.posX</code> / <code>radio.posZ</code>. No effect in free-for-all or radio-disabled battles.</td></tr>
 </table>
 <div class="tip"><strong>Tip:</strong> Angles use the convention 0 = +Z axis (north), increasing clockwise.
@@ -376,8 +380,8 @@ with radar shots — corners, robots behind walls, or enemies spotted via radio.
 </p>
 <h3>Enemy sightings</h3>
 <ul>
-  <li><strong>Send:</strong> set <code>out.radioX</code> and <code>out.radioZ</code> to broadcast an enemy position.</li>
-  <li><strong>Receive:</strong> <code>radio.tipX</code> / <code>radio.tipZ</code> — the X/Z of the latest enemy-sighting sent by a teammate <em>this frame</em>. Both are 0 if none arrived.</li>
+  <li><strong>Send:</strong> set <code>out.radioX</code> and <code>out.radioZ</code> to broadcast an enemy position. Optionally also set <code>out.radioVX</code> / <code>out.radioVZ</code> to include your velocity estimate — this lets teammates lead their howitzer shots.</li>
+  <li><strong>Receive:</strong> <code>radio.tipX</code> / <code>radio.tipZ</code> — the X/Z of the latest enemy-sighting sent by a teammate <em>this frame</em>. Both are 0 if none arrived. <code>radio.tipVX</code> / <code>radio.tipVZ</code> — the velocity the sender included (0 if not provided).</li>
 </ul>
 <h3>Position broadcasts (dispersion)</h3>
 <ul>
@@ -396,12 +400,16 @@ with radar shots — corners, robots behind walls, or enemies spotted via radio.
 </p>
 <pre><code>-- ---- Enemy tip ----
 if d &gt; 0 then
-  out.radioX = me.x + sin(mem[0]) * d   -- broadcast enemy position
-  out.radioZ = me.z + cos(mem[0]) * d
+  out.radioX  = me.x + sin(mem[0]) * d   -- broadcast enemy position + velocity
+  out.radioZ  = me.z + cos(mem[0]) * d
+  out.radioVX = mem[5]   -- smoothed enemy velocity X (stored in mem[5])
+  out.radioVZ = mem[6]
 end
 if radio.tipX != 0 then
   mem[20] = radio.tipX   -- cache the tip
   mem[21] = radio.tipZ
+  mem[27] = radio.tipVX  -- and its velocity (0 if sender didn't include it)
+  mem[28] = radio.tipVZ
 end
 
 -- ---- Position broadcast (every 2 s) ----

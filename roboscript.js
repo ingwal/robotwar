@@ -35,6 +35,7 @@
     SCAN_FRIENDLY: 20, SCAN_DIST: 21, SCAN_ANGLE: 22,
     RADIO_POS_X: 23, RADIO_POS_Z: 24,
     RADIO_DEATH_TEAM: 25, RADIO_DEATH_X: 26, RADIO_DEATH_Z: 27,
+    RADIO_TIP_VX: 28, RADIO_TIP_VZ: 29,
   };
 
   // ---- Output IDs (used with WRO) ----
@@ -45,6 +46,7 @@
     HOW_X: 5, HOW_Z: 6,
     RADIO_X: 7, RADIO_Z: 8,
     RADIO_SEND_POS: 9,
+    RADIO_VX: 10, RADIO_VZ: 11,
   };
 
   // ---- Opcodes ----
@@ -101,12 +103,12 @@
 
         // Radio: expose the freshest message of each type received this frame.
         // All values are 0 when radio is disabled or no message of that type arrived.
-        let _rTipX = 0, _rTipZ = 0;
+        let _rTipX = 0, _rTipZ = 0, _rTipVX = 0, _rTipVZ = 0;
         let _rPosX = 0, _rPosZ = 0;
         let _rDeathTeam = 0, _rDeathX = 0, _rDeathZ = 0;
         if (world.radio) {
           for (const msg of world.radio.inbox) {
-            if (msg.type === 'enemy'    && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; }
+            if (msg.type === 'enemy'    && _rTipX      === 0) { _rTipX = msg.x; _rTipZ = msg.z; _rTipVX = msg.vx ?? 0; _rTipVZ = msg.vz ?? 0; }
             if (msg.type === 'position' && _rPosX      === 0) { _rPosX = msg.x; _rPosZ = msg.z; }
             if (msg.type === 'death'    && _rDeathTeam === 0) {
               _rDeathTeam = msg.teamId ?? 0; _rDeathX = msg.x ?? 0; _rDeathZ = msg.z ?? 0;
@@ -115,6 +117,8 @@
         }
         reg[SENSOR_BASE + SID.RADIO_TIP_X]      = _rTipX;
         reg[SENSOR_BASE + SID.RADIO_TIP_Z]      = _rTipZ;
+        reg[SENSOR_BASE + SID.RADIO_TIP_VX]     = _rTipVX;
+        reg[SENSOR_BASE + SID.RADIO_TIP_VZ]     = _rTipVZ;
         reg[SENSOR_BASE + SID.RADIO_POS_X]      = _rPosX;
         reg[SENSOR_BASE + SID.RADIO_POS_Z]      = _rPosZ;
         reg[SENSOR_BASE + SID.RADIO_DEATH_TEAM] = _rDeathTeam;
@@ -131,6 +135,8 @@
         reg[OUTPUT_BASE + OID.HOW_Z]   = NaN;
         reg[OUTPUT_BASE + OID.RADIO_X]        = NaN;  // don't broadcast enemy tip
         reg[OUTPUT_BASE + OID.RADIO_Z]        = NaN;
+        reg[OUTPUT_BASE + OID.RADIO_VX]       = 0;   // velocity to include in enemy broadcast
+        reg[OUTPUT_BASE + OID.RADIO_VZ]       = 0;
         reg[OUTPUT_BASE + OID.RADIO_SEND_POS] = 0;    // don't broadcast position
 
         // Execute bytecode.
@@ -226,7 +232,7 @@
         const rz = reg[OUTPUT_BASE + OID.RADIO_Z];
         // Send radio messages if requested.
         if (!Number.isNaN(rx) && !Number.isNaN(rz) && world.radio)
-          world.radio.send({ type: 'enemy', x: rx, z: rz });
+          world.radio.send({ type: 'enemy', x: rx, z: rz, vx: reg[OUTPUT_BASE + OID.RADIO_VX], vz: reg[OUTPUT_BASE + OID.RADIO_VZ] });
         if (reg[OUTPUT_BASE + OID.RADIO_SEND_POS] !== 0 && world.radio)
           world.radio.send({ type: 'position', x: me.x, z: me.z });
         const out = {
@@ -268,7 +274,7 @@
       }
       if (op === OP.RDS && a >= 64)
         return `RDS sensor id ${a} out of range at instruction ${i / 2}`;
-      if (op === OP.WRO && dst >= 10)
+      if (op === OP.WRO && dst >= 12)
         return `WRO output id ${dst} out of range at instruction ${i / 2}`;
     }
     return null;
