@@ -660,6 +660,8 @@ void main() {
           const frac = Math.min(1, tLand / b.lifeMax);
           const r = frac * 3.0;
           if (r > 0.05) {
+            draw(M.disc, chain(translate(lx, 0.03, lz), scale(r + 0.14, 1, r + 0.14)),
+              [0.02, 0.02, 0.02], 0.75);
             drawGlow(M.disc, chain(translate(lx, 0.04, lz), scale(r, 1, r)),
               b.color, 0.25 + 0.45 * frac, 7);
           }
