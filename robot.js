@@ -650,6 +650,21 @@ void main() {
         drawGlow(M.sphere, chain(translate(tx, Math.max(0.05, ty), tz), scale(0.07 + i * 0.025)),
           [0.55, 0.52, 0.48], (1 - i / 8) * 0.45, 5);
       }
+      // Impact prediction ring: shrinks from blast radius to a point as shell approaches
+      if (b.lifeMax > 0) {
+        const vy = b.vy ?? 0;
+        const disc = vy * vy + 2 * g * b.y;
+        if (disc >= 0) {
+          const tLand = (vy + Math.sqrt(disc)) / g;
+          const lx = b.x + b.vx * tLand, lz = b.z + b.vz * tLand;
+          const frac = Math.min(1, tLand / b.lifeMax);
+          const r = frac * 3.0;
+          if (r > 0.05) {
+            drawGlow(M.disc, chain(translate(lx, 0.04, lz), scale(r, 1, r)),
+              b.color, 0.25 + 0.45 * frac, 7);
+          }
+        }
+      }
     }
 
     // A little missile pointing the way it flies, with a flickering flame and a smoke trail

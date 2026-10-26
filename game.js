@@ -412,11 +412,12 @@
       if (sinVal > 1) return;
       const theta = Math.PI / 2 - Math.asin(sinVal) / 2;
       const vh = HOWITZER_SPEED * Math.cos(theta), vy0 = HOWITZER_SPEED * Math.sin(theta);
+      const tFlight = (vy0 + Math.sqrt(vy0 * vy0 + 2 * HOWITZER_GRAVITY * 1.2)) / HOWITZER_GRAVITY;
       bullets.push({
         x: r.x, z: r.z, y: 1.2, x0: r.x, z0: r.z,
         vx: (dx / range) * vh, vz: (dz / range) * vh, vy: vy0, gravity: HOWITZER_GRAVITY,
         owner: r, color: r.color, howitzer: true,
-        life: 2 * vy0 / HOWITZER_GRAVITY + 0.5,
+        life: tFlight + 0.5, lifeMax: tFlight,
       });
       r.howCooldown = HOWITZER_COOLDOWN;
     }
