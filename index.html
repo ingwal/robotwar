@@ -184,6 +184,7 @@
 <script src="strategies.js?v=2"></script>
 <script src="roboscript.js?v=2"></script>
 <script src="roboscript-compiler.js?v=2"></script>
+<script src="game.js?v=1"></script>
 <script>
 'use strict';
 const canvas = document.getElementById('c');
@@ -192,106 +193,9 @@ if (!gl) throw new Error('WebGL2 not supported');
 const gfx = RobotGfx.create(gl);
 const { mat4 } = RobotGfx;
 
-// ---------- constants ----------
-const MAX_HP = 6;
-const MAX_SPEED = 1.8;
-const BULLET_SPEED = 16;
-const DEATH_TIME = 0.7;
-const ROBOT_RADIUS = 0.7;
-const MINE_DAMAGE_CHOICES = [1, 2, 4, 0]; // hits a blast deals to robots and wall blocks; 0 = deadly
-const MINE_BLAST = 2.2;     // blast radius
-const MINE_TRIGGER = 0.8;   // a robot this close to a mine sets it off
-
-const HOWITZER_SPEED = 20;     // muzzle velocity (units/s)
-const HOWITZER_GRAVITY = 10;   // gravity (units/s²) — no air resistance
-const HOWITZER_BLAST = 3.0;    // landing explosion radius
-const HOWITZER_COOLDOWN = 5;   // reload time (seconds)
-
-const TEAMS = [
-  { name: 'Coral',  color: [1.0,  0.45, 0.40] },
-  { name: 'Teal',   color: [0.25, 0.75, 0.72] },
-  { name: 'Sunny',  color: [1.0,  0.75, 0.25] },
-  { name: 'Violet', color: [0.60, 0.50, 0.95] },
-  { name: 'Lime',   color: [0.50, 0.92, 0.22] },
-  { name: 'Azure',  color: [0.22, 0.52, 1.0]  },
-  { name: 'Rose',   color: [1.0,  0.35, 0.68] },
-  { name: 'Amber',  color: [1.0,  0.58, 0.08] },
-];
-
-// Wall layouts as fractions of ARENA so they scale with arena size.
-// Each entry is [fx0, fz0, fx1, fz1] where 1.0 = ARENA half-width.
-const WALL_LAYOUTS = {
-  open: [],
-  cross: [
-    [-0.5,   -0.25,  -0.443,  0.25 ],
-    [ 0.443, -0.25,   0.5,    0.25 ],
-    [-0.25,  -0.5,    0.25,  -0.443],
-    [-0.25,   0.443,  0.25,   0.5  ],
-    [-0.071, -0.071,  0.071,  0.071],
-  ],
-  fourRooms: [
-    [-1.0,  -0.036, -0.15,  0.036],
-    [ 0.15, -0.036,  1.0,   0.036],
-    [-0.036,  0.15,  0.036, 1.0  ],
-    [-0.036, -1.0,   0.036,-0.15 ],
-  ],
-  pillars: [
-    [-0.6,  -0.6,  -0.5,  -0.5 ],
-    [ 0.5,  -0.6,   0.6,  -0.5 ],
-    [-0.6,   0.5,  -0.5,   0.6 ],
-    [ 0.5,   0.5,   0.6,   0.6 ],
-    [-0.071,-0.071,  0.071, 0.071],
-    [ 0.3,  -0.15,  0.4,   0.15 ],
-  ],
-  maze: [
-    [-0.7,  -0.036,  0.1,   0.036],
-    [ 0.3,  -0.036,  0.7,   0.036],
-    [-0.1,  -0.7,    0.036,-0.15 ],
-    [-0.036,  0.2,   0.1,   0.7  ],
-    [ 0.4,   0.3,    0.5,   0.7  ],
-    [-0.5,  -0.65,  -0.4,  -0.3  ],
-  ],
-};
-
-// Each wall is cut into roughly 1x1 blocks that can be shot to pieces one at a time.
-// wallHp is the number of hits a block takes; 0 makes walls indestructible.
 const WALL_HP_CHOICES = [1, 2, 4, 8, 0];
-const BLOCK_SIZE = 1;
-function buildWalls(layoutKey, arena, wallHp = 2) {
-  const blocks = [];
-  const addBox = (x0, z0, x1, z1, extra) => {
-    const nx = Math.max(1, Math.round((x1 - x0) / BLOCK_SIZE)), nz = Math.max(1, Math.round((z1 - z0) / BLOCK_SIZE));
-    if (extra?.building) Object.assign(extra.building, { x0, z0, x1, z1, blocks: nx * nz });
-    for (let i = 0; i < nx; i++)
-      for (let j = 0; j < nz; j++)
-        blocks.push({
-          x0: x0 + ((x1 - x0) * i) / nx, x1: x0 + ((x1 - x0) * (i + 1)) / nx,
-          z0: z0 + ((z1 - z0) * j) / nz, z1: z0 + ((z1 - z0) * (j + 1)) / nz,
-          hp: wallHp || Infinity, maxHp: wallHp, seed: Math.random() * 10, ...extra,
-        });
-  };
-  if (layoutKey === 'downtown') buildDowntown(arena, addBox);
-  else for (const [fx0, fz0, fx1, fz1] of WALL_LAYOUTS[layoutKey] ?? []) addBox(fx0 * arena, fz0 * arena, fx1 * arena, fz1 * arena);
-  return blocks;
-}
+const MINE_DAMAGE_CHOICES = [1, 2, 4, 0];
 
-// A city centre: streets of uneven width (including one all the way round the edge) with city
-// blocks of uneven size between them, some joined across a street. Each block is split into
-// buildings of different sizes, heights and kinds; some stand back from the street, and now
-// and then a lot or a whole block is left open as a square. Seeded by the arena size, so the city
-// in the setup preview is the one you fight in.
-// Each kind has a facade photo (textures/, CC0 from ambientCG); tile is how many world units
-// one copy of the photo covers, so that a storey is about 0.9 units on every kind. color is the
-// photo's average, used for falling debris.
-const BUILDING_KINDS = [
-  { tex: 'facade-brick.jpg',        tile: 5.4,  color: [0.43, 0.41, 0.41], minH: 1.6, maxH: 2.8 },
-  { tex: 'facade-concrete.jpg',     tile: 5.4,  color: [0.35, 0.36, 0.37], minH: 2.2, maxH: 4.2 },
-  { tex: 'facade-white-office.jpg', tile: 7.2,  color: [0.46, 0.5, 0.5],   minH: 1.8, maxH: 3.6 },
-  { tex: 'facade-glass.jpg',        tile: 9,    color: [0.27, 0.3, 0.33],  minH: 3.2, maxH: 5.5 },
-  { tex: 'facade-dark-office.jpg',  tile: 28.8, color: [0.37, 0.33, 0.31], minH: 2.6, maxH: 4.6 },
-];
-const STREET = 3.2;
-// Floor choices; tile is how many world units one copy of the photo covers (CC0, ambientCG).
 const GROUND_KINDS = {
   checker: null,
   grass:    { tex: 'ground-grass.jpg',    tile: 4 },
@@ -299,86 +203,9 @@ const GROUND_KINDS = {
   concrete: { tex: 'ground-concrete.jpg', tile: 4 },
 };
 
-// One texture array holds every photo: the facades first (layer = building kind), then the grounds.
-const TEXTURE_FILES = BUILDING_KINDS.map((k) => k.tex);
+const TEXTURE_FILES = GameEngine.BUILDING_KINDS.map((k) => k.tex);
 for (const g of Object.values(GROUND_KINDS)) if (g) g.layer = TEXTURE_FILES.push(g.tex) - 1;
 gfx.loadTextures(TEXTURE_FILES.map((f) => 'textures/' + f));
-
-function buildDowntown(arena, addBox) {
-  let seed = 1013904223 + arena * 7919;
-  const rand = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  const range = (a, b) => a + rand() * (b - a);
-
-  // Cut one axis into city blocks of uneven width, with streets of uneven width between them
-  // (now and then a wide avenue). Each axis is cut on its own, so the grid doesn't line up.
-  const cutAxis = () => {
-    const lo = -arena + STREET, inner = 2 * (arena - STREET);
-    const n = Math.max(1, Math.round((inner + 3.4) / (6.5 + 3.4)));
-    const streets = Array.from({ length: n - 1 }, () => (rand() < 0.2 ? range(4.4, 5.2) : range(2.6, 3.8)));
-    const weights = Array.from({ length: n }, () => range(0.4, 2));
-    const room = inner - streets.reduce((a, b) => a + b, 0), wsum = weights.reduce((a, b) => a + b, 0);
-    const spans = [];
-    let a = lo;
-    for (let i = 0; i < n; i++) {
-      const w = (room * weights[i]) / wsum;
-      spans.push([a, a + w]);
-      a += w + (streets[i] ?? 0);
-    }
-    return spans;
-  };
-  const xs = cutAxis(), zs = cutAxis();
-
-  // City blocks, some merged with a neighbour across the street between them so that street
-  // ends in a T. A block merges at most once, so no crossing loses all its streets.
-  const merged = new Set(), blocks = [];
-  for (let i = 0; i < xs.length; i++)
-    for (let j = 0; j < zs.length; j++) {
-      if (merged.has(i + ',' + j)) continue;
-      let [x0, x1] = xs[i], [z0, z1] = zs[j];
-      if (rand() < 0.25) {
-        const right = i + 1 < xs.length && !merged.has(i + 1 + ',' + j);
-        const down = j + 1 < zs.length && !merged.has(i + ',' + (j + 1));
-        if (right && (!down || rand() < 0.5)) { x1 = xs[i + 1][1]; merged.add(i + 1 + ',' + j); }
-        else if (down) { z1 = zs[j + 1][1]; merged.add(i + ',' + (j + 1)); }
-      }
-      blocks.push([x0, z0, x1, z1]);
-    }
-
-  // Split a block into lots: cut the longer side somewhere between a third and two thirds,
-  // again and again while the pieces are big enough.
-  const lots = [];
-  const split = (x0, z0, x1, z1, depth) => {
-    const w = x1 - x0, d = z1 - z0, long = Math.max(w, d);
-    if (long < 4.6 || (depth > 0 && rand() < 0.3) || depth > 3) { lots.push([x0, z0, x1, z1]); return; }
-    const t = range(Math.max(0.3, 2.2 / long), Math.min(0.7, 1 - 2.2 / long)); // no lot thinner than 2.2
-    if (w >= d) { const m = x0 + w * t; split(x0, z0, m, z1, depth + 1); split(m, z0, x1, z1, depth + 1); }
-    else { const m = z0 + d * t; split(x0, z0, x1, m, depth + 1); split(x0, m, x1, z1, depth + 1); }
-  };
-  for (const b of blocks) {
-    if (rand() < 0.07) continue; // a whole block left open as a square
-    split(...b, 0);
-  }
-
-  for (let [x0, z0, x1, z1] of lots) {
-    if (rand() < 0.08) continue; // empty lot
-    // Some buildings stand back from the street on a side or two, if they stay big enough.
-    const back = (len) => (len > 3 && rand() < 0.25 ? range(0.3, 0.7) : 0);
-    const bx = x1 - x0, bz = z1 - z0;
-    x0 += back(bx); x1 -= back(bx); z0 += back(bz); z1 -= back(bz);
-    const k = Math.floor(rand() * BUILDING_KINDS.length), kind = BUILDING_KINDS[k];
-    const h = kind.minH + rand() * (kind.maxH - kind.minH);
-    const shade = 0.9 + rand() * 0.2;
-    addBox(x0, z0, x1, z1, {
-      h, color: kind.color.map((v) => Math.min(1, v * shade)),
-      facade: { layer: k, tile: kind.tile, tint: Math.min(1.1, 1.05 * shade) },
-      building: {}, // shared by all its blocks; lets the renderer draw it whole while undamaged
-    });
-  }
-}
-
-let ARENA = 14;
-let RADAR_RANGE = ARENA * 2 * Math.SQRT2;
-let WALLS = buildWalls('cross', ARENA);
 
 const STRATEGY_KEYS = Object.keys(Strategies);
 
@@ -397,7 +224,7 @@ function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
   const isStrategy = (k) => typeof k === 'string' && Object.hasOwn(Strategies, k);
   if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
-  if (Object.hasOwn(WALL_LAYOUTS, saved.layout) || saved.layout === 'downtown') config.layout = saved.layout;
+  if (Object.hasOwn(GameEngine.WALL_LAYOUTS, saved.layout) || saved.layout === 'downtown') config.layout = saved.layout;
   if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
   if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
   if (saved.mineCount >= 0 && saved.mineCount <= 30) config.mineCount = saved.mineCount | 0;
@@ -454,461 +281,32 @@ try { applySaved(JSON.parse(localStorage.getItem('robotwar.config'))); } catch {
 applySaved(configFromQuery(location.search));
 
 let phase = 'setup';
-let robots = [], bullets = [], explosions = [], impacts = [], crumbles = [], mines = [], radioPulses = [], roundOverTimer = 0, battleTime = 0;
-let battleEntrants = []; // snapshot of participating teams recorded at round start
-let teamEliminatedAt = {}; // battleTime when each team lost its last robot
-const teamRadio = new Map();
+let game;
+let explosions = [], impacts = [], crumbles = [], radioPulses = [];
+let roundOverPending = false, roundOverWinner = null, roundOverPrefix = '';
+let roundOverTimer = 0;
 const ordinal = (n) => n + (['th','st','nd','rd'][((n % 100) - 20) % 10] ?? ['th','st','nd','rd'][n % 100] ?? 'th');
 const msg = document.getElementById('msg');
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 
 function newRound(cfg) {
-  cfg = cfg ?? config;
   clearWatched();
-  ARENA = cfg.arenaSize ?? 14;
-  RADAR_RANGE = ARENA * 2 * Math.SQRT2;
-  WALLS = buildWalls(cfg.layout ?? 'cross', ARENA, cfg.wallHp ?? 2);
-  wallsVersion++;
-
-  if (cfg.teamsMode) {
-    const flat = [];
-    for (let t = 0; t < cfg.teamCount; t++) {
-      const team = TEAMS[t % TEAMS.length];
-      const strats = cfg.teamStrategies[t] || [];
-      for (let ri = 0; ri < cfg.robotsPerTeam; ri++)
-        flat.push({ team, teamId: t, strategy: strats[ri] || STRATEGY_KEYS[ri % STRATEGY_KEYS.length], robotIndex: ri });
-    }
-    robots = flat.map(({ team, teamId, strategy, robotIndex }, i) => {
-      const a = (i / flat.length) * Math.PI * 2 + Math.PI / 4;
-      return {
-        name: `${team.name} ${robotIndex + 1}`, color: team.color, teamId, robotIndex,
-        label: robotIndex + 1, strategy, mem: {},
-        x: Math.sin(a) * ARENA * 0.65, z: Math.cos(a) * ARENA * 0.65,
-        heading: a + Math.PI, turret: a + Math.PI,
-        seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
-        hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
-        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, howCooldown: 0, scan: null, stuckTime: 0, blocked: false,
-        wallHit: false, robotHit: false, hitAngle: 0,
-      };
-    });
-  } else {
-    const count = cfg.robotCount ?? 4;
-    const strats = cfg.strategies ?? [];
-    robots = Array.from({ length: count }, (_, i) => {
-      const team = TEAMS[i % TEAMS.length];
-      const a = (i / count) * Math.PI * 2 + Math.PI / 4;
-      return {
-        name: team.name, color: team.color, teamId: i, robotIndex: i, label: null,
-        strategy: strats[i] || STRATEGY_KEYS[i % STRATEGY_KEYS.length], mem: {},
-        x: Math.sin(a) * ARENA * 0.65, z: Math.cos(a) * ARENA * 0.65,
-        heading: a + Math.PI, turret: a + Math.PI,
-        seed: i * 1.3, speed: 0, wheel: 0, turnRate: 0, recoil: [0, 0], hit: 0,
-        hp: cfg.shotsToKill ?? MAX_HP, maxHp: cfg.shotsToKill ?? MAX_HP, dying: null,
-        cooldown: 1.5 + Math.random() * 1.5, nextSide: 0, howCooldown: 0, scan: null, stuckTime: 0, blocked: false,
-        wallHit: false, robotHit: false, hitAngle: 0,
-      };
-    });
-  }
-  bullets = []; explosions = []; impacts = []; crumbles = []; radioPulses = [];
-  teamRadio.clear();
-  for (const r of robots) r.radioInbox = [];
-  for (const r of robots) Object.assign(r, nearestFreePoint(r)); // don't start inside a building
-  mines = placeMines(cfg.mineCount ?? 0, cfg.mineDamage ?? 2);
-  battleTime = 0;
-  teamEliminatedAt = {};
+  game = GameEngine.create(cfg ?? config, Strategies);
   msg.textContent = '';
-  // Snapshot teams for the end-of-battle results screen.
-  const seenTeams = new Set();
-  battleEntrants = [];
-  for (const r of robots) {
-    if (!seenTeams.has(r.teamId)) {
-      seenTeams.add(r.teamId);
-      const teamRobots = robots.filter((x) => x.teamId === r.teamId);
-      const displayName = cfg.teamsMode ? TEAMS[r.teamId % TEAMS.length].name : r.name;
-      battleEntrants.push({ teamId: r.teamId, name: displayName, color: r.color,
-        strategy: r.strategy, startCount: teamRobots.length });
-    }
-  }
   buildBoard();
 }
 
-// Scatter mines on open floor, away from walls, from where the robots start and from each other.
-function placeMines(count, damage) {
-  const placed = [], lim = ARENA - 1.5;
-  for (let tries = 0; placed.length < count && tries < count * 200; tries++) {
-    const p = { x: (Math.random() * 2 - 1) * lim, z: (Math.random() * 2 - 1) * lim };
-    if (WALLS.some((w) => p.x > w.x0 - 1 && p.x < w.x1 + 1 && p.z > w.z0 - 1 && p.z < w.z1 + 1)) continue;
-    if (robots.some((r) => Math.hypot(r.x - p.x, r.z - p.z) < 3.5)) continue;
-    if (placed.some((m) => Math.hypot(m.x - p.x, m.z - p.z) < 1.8)) continue;
-    placed.push({ ...p, damage: damage || Infinity, seed: Math.random() * 10 });
-  }
-  return placed;
-}
-
-// Knock a hit off a wall block; at zero it crumbles away.
-function damageBlock(block, hits = 1) {
-  if (block.hp === Infinity || (block.hp -= hits) > 0) return; // Infinity = indestructible
-  WALLS.splice(WALLS.indexOf(block), 1);
-  wallsVersion++;
-  crumbles.push({ ...block, age: 0 });
-  playCrumble();
-}
-
-function detonate(mine) {
-  mines.splice(mines.indexOf(mine), 1);
-  explosions.push({ x: mine.x, z: mine.z, age: 0, color: [0.3, 0.32, 0.28], seed: mine.seed });
-  playBoom();
-  for (const r of robots) {
-    if (r.dying !== null || Math.hypot(r.x - mine.x, r.z - mine.z) > MINE_BLAST) continue;
-    r.hit = 1;
-    r.hp = Math.max(0, r.hp - mine.damage);
-    if (r.hp === 0) { r.dying = 0; sendDeathNotice(r); }
-  }
-  for (const w of WALLS.slice()) {
-    const cx = clamp(mine.x, w.x0, w.x1), cz = clamp(mine.z, w.z0, w.z1);
-    if (Math.hypot(cx - mine.x, cz - mine.z) < MINE_BLAST) damageBlock(w, mine.damage);
-  }
-}
-
-// ---------- navigation ----------
-// The floor is cut into a grid of small cells; a cell is free when a robot standing on it would
-// clear every wall. When a robot's goal is out of sight behind a building, the game finds a
-// route over free cells with A* and steers the robot along it, so every strategy can drive round
-// obstacles without knowing about them. Rebuilt whenever a wall block is destroyed.
-const NAV_CELL = 0.5, NAV_CLEAR = ROBOT_RADIUS + 0.25;
-let wallsVersion = 0, nav = null;
-
-function navGrid() {
-  if (nav && nav.version === wallsVersion && nav.arena === ARENA) return nav;
-  const n = Math.ceil((2 * ARENA) / NAV_CELL), free = new Uint8Array(n * n), lim = ARENA - 0.8;
-  for (let j = 0; j < n; j++)
-    for (let i = 0; i < n; i++) {
-      const x = -ARENA + (i + 0.5) * NAV_CELL, z = -ARENA + (j + 0.5) * NAV_CELL;
-      free[j * n + i] = Math.abs(x) <= lim && Math.abs(z) <= lim ? 1 : 0;
-    }
-  const cellIdx = (v) => Math.floor((v + ARENA) / NAV_CELL);
-  for (const w of WALLS)
-    for (let j = Math.max(0, cellIdx(w.z0 - NAV_CLEAR)); j <= Math.min(n - 1, cellIdx(w.z1 + NAV_CLEAR)); j++)
-      for (let i = Math.max(0, cellIdx(w.x0 - NAV_CLEAR)); i <= Math.min(n - 1, cellIdx(w.x1 + NAV_CLEAR)); i++) {
-        const x = -ARENA + (i + 0.5) * NAV_CELL, z = -ARENA + (j + 0.5) * NAV_CELL;
-        if (Math.hypot(x - clamp(x, w.x0, w.x1), z - clamp(z, w.z0, w.z1)) < NAV_CLEAR) free[j * n + i] = 0;
-      }
-  return (nav = { n, free, version: wallsVersion, arena: ARENA });
-}
-
-const navCell = (g, p) => [clamp(Math.floor((p.x + ARENA) / NAV_CELL), 0, g.n - 1), clamp(Math.floor((p.z + ARENA) / NAV_CELL), 0, g.n - 1)];
-const navPoint = (i, j) => ({ x: -ARENA + (i + 0.5) * NAV_CELL, z: -ARENA + (j + 0.5) * NAV_CELL });
-const navFree = (g, p) => { const [i, j] = navCell(g, p); return g.free[j * g.n + i] === 1; };
-
-// The free cell closest to p (searching outward ring by ring), as a point.
-function nearestFreePoint(p) {
-  const g = navGrid(), [ci, cj] = navCell(g, p);
-  if (g.free[cj * g.n + ci]) return { x: p.x, z: p.z };
-  for (let rad = 1; rad < g.n; rad++) {
-    let best = null, bestD = Infinity;
-    for (let j = cj - rad; j <= cj + rad; j++)
-      for (let i = ci - rad; i <= ci + rad; i++) {
-        if (i < 0 || j < 0 || i >= g.n || j >= g.n || Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== rad) continue;
-        if (!g.free[j * g.n + i]) continue;
-        const q = navPoint(i, j), d = Math.hypot(q.x - p.x, q.z - p.z);
-        if (d < bestD) { bestD = d; best = q; }
-      }
-    if (best) return best;
-  }
-  return { x: p.x, z: p.z };
-}
-
-// True when a robot could drive straight from a to b. The ends are allowed to be a little
-// inside the clearance margin, since robots often stand right next to a wall.
-function lineClear(a, b) {
-  const g = navGrid(), d = Math.hypot(b.x - a.x, b.z - a.z), steps = Math.ceil(d / (NAV_CELL / 2));
-  for (let k = 1; k < steps; k++) {
-    const t = k / steps, along = t * d;
-    if (along < 0.75 || d - along < 0.75) continue;
-    if (!navFree(g, { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t })) return false;
-  }
-  return true;
-}
-
-// A* over free cells, 8-connected without cutting corners. If the goal can't be reached, the
-// route leads to the reachable cell nearest to it. Returns a list of points, start excluded.
-function findPath(from, to) {
-  const g = navGrid(), n = g.n;
-  const s = nearestFreePoint(from), t = nearestFreePoint(to);
-  const [si, sj] = navCell(g, s), [ti, tj] = navCell(g, t);
-  const start = sj * n + si, goal = tj * n + ti;
-  const h = (k) => { const dx = Math.abs((k % n) - ti), dz = Math.abs(((k / n) | 0) - tj); return Math.max(dx, dz) + 0.414 * Math.min(dx, dz); };
-  const cost = new Float32Array(n * n).fill(Infinity), came = new Int32Array(n * n).fill(-1);
-  const heap = [[h(start), start]];
-  const push = (e) => { heap.push(e); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-  cost[start] = 0;
-  let best = start;
-  while (heap.length) {
-    const [, k] = pop();
-    if (k === goal) { best = k; break; }
-    if (h(k) < h(best)) best = k;
-    const i = k % n, j = (k / n) | 0;
-    for (let dj = -1; dj <= 1; dj++)
-      for (let di = -1; di <= 1; di++) {
-        if (!di && !dj) continue;
-        const ni = i + di, nj = j + dj;
-        if (ni < 0 || nj < 0 || ni >= n || nj >= n || !g.free[nj * n + ni]) continue;
-        if (di && dj && (!g.free[j * n + ni] || !g.free[nj * n + i])) continue;
-        const nk = nj * n + ni, c = cost[k] + (di && dj ? 1.414 : 1);
-        if (c < cost[nk]) { cost[nk] = c; came[nk] = k; push([c + h(nk), nk]); }
-      }
-  }
-  const path = [];
-  for (let k = best; k !== start && k !== -1; k = came[k]) path.push(navPoint(k % n, (k / n) | 0));
-  return path.reverse();
-}
-
-// Where the robot should actually drive this frame to get to goal: straight at it when the way
-// is clear, otherwise to the farthest point of its route that it can see.
-function steer(r, goal) {
-  if (!goal || lineClear(r, goal)) { r.nav = null; return goal; }
-  let nv = r.nav;
-  if (!nv || nv.version !== wallsVersion || Math.hypot(nv.gx - goal.x, nv.gz - goal.z) > 1 ||
-      battleTime - nv.t > 2 || (r.blocked && battleTime - nv.t > 0.5)) {
-    nv = r.nav = { gx: goal.x, gz: goal.z, version: wallsVersion, t: battleTime, path: findPath(r, goal) };
-  }
-  const p = nv.path;
-  while (p.length > 1 && Math.hypot(p[0].x - r.x, p[0].z - r.z) < 0.6) p.shift();
-  if (!p.length) return goal;
-  for (let i = Math.min(p.length - 1, 24); i > 0; i--) if (lineClear(r, p[i])) return p[i];
-  return p[0];
-}
-
-const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
-const turnToward = (cur, target, step) => cur + Math.max(-step, Math.min(step, angDiff(cur, target)));
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-
-function fire(r) {
-  const side = r.nextSide;
-  r.nextSide ^= 1;
-  r.recoil[side] = 1;
-  r.cooldown = 2 + Math.random() * 1.5;
-  const lx = side ? 0.6 : -0.6, lz = 0.6, c = Math.cos(r.turret), s = Math.sin(r.turret);
-  const bx = r.x + c * lx + s * lz, bz = r.z - s * lx + c * lz;
-  const aimDist = r.scan ? r.scan.range : RADAR_RANGE;
-  const ax = r.x + s * aimDist, az = r.z + c * aimDist;
-  const ddx = ax - bx, ddz = az - bz, dd = Math.hypot(ddx, ddz);
-  bullets.push({
-    x: bx, y: 1.4, z: bz, x0: bx, z0: bz,
-    vx: (ddx / dd) * BULLET_SPEED, vz: (ddz / dd) * BULLET_SPEED, owner: r, color: r.color, life: RADAR_RANGE / BULLET_SPEED,
-  });
-}
-
-function fireHowitzer(r, tx, tz) {
-  const dx = tx - r.x, dz = tz - r.z;
-  const range = Math.hypot(dx, dz);
-  if (range < 1) return;
-  const sinVal = range * HOWITZER_GRAVITY / (HOWITZER_SPEED * HOWITZER_SPEED);
-  if (sinVal > 1) return;
-  const theta = Math.PI / 2 - Math.asin(sinVal) / 2;
-  const vh = HOWITZER_SPEED * Math.cos(theta);
-  const vy0 = HOWITZER_SPEED * Math.sin(theta);
-  const vx = (dx / range) * vh, vz = (dz / range) * vh;
-  bullets.push({
-    x: r.x, z: r.z, y: 1.2, x0: r.x, z0: r.z,
-    vx, vz, vy: vy0, gravity: HOWITZER_GRAVITY,
-    owner: r, color: r.color, howitzer: true,
-    life: 2 * vy0 / HOWITZER_GRAVITY + 0.5,
-  });
-  r.howCooldown = HOWITZER_COOLDOWN;
-}
-
-function landHowitzer(b) {
-  if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA) return;
-  playBoom();
-  explosions.push({ x: b.x, z: b.z, age: 0, color: b.color, seed: Math.random() * 10, scale: 2.0 });
-  for (const r of robots) {
-    if (r.dying !== null || r.teamId === b.owner.teamId) continue;
-    if (Math.hypot(r.x - b.x, r.z - b.z) < HOWITZER_BLAST) {
-      r.hit = 1; playMissileHit();
-      r.hp -= 1;
-      if (r.hp <= 0) { r.hp = 0; r.dying = 0; sendDeathNotice(r); }
-    }
-  }
-  for (const w of WALLS.slice()) {
-    const cx = clamp(b.x, w.x0, w.x1), cz = clamp(b.z, w.z0, w.z1);
-    if (Math.hypot(cx - b.x, cz - b.z) < HOWITZER_BLAST) damageBlock(w);
-  }
-}
-
-function drive(r, goal, speedFactor, dt) {
-  const before = r.heading;
-  let targetSpeed = 0;
-  if (goal) {
-    const lim = ARENA - 0.8;
-    const gx = clamp(goal.x, -lim, lim), gz = clamp(goal.z, -lim, lim);
-    const d = Math.hypot(gx - r.x, gz - r.z);
-    if (d > 0.3) {
-      const want = Math.atan2(gx - r.x, gz - r.z);
-      r.heading = turnToward(r.heading, want, 2.4 * dt);
-      const off = angDiff(r.heading, want);
-      if (Math.abs(off) < 0.8) targetSpeed = MAX_SPEED * clamp(speedFactor, 0, 1.3) * Math.cos(off) * Math.min(1, d / 1.5);
-    }
-  }
-  r.turnRate = angDiff(before, r.heading) / dt;
-  r.speed += (targetSpeed - r.speed) * Math.min(1, dt * 4);
-  r.x += Math.sin(r.heading) * r.speed * dt;
-  r.z += Math.cos(r.heading) * r.speed * dt;
-  r.wheel += r.speed * dt;
-}
-
-function pushOutOfWall(r, w) {
-  const cx = clamp(r.x, w.x0, w.x1), cz = clamp(r.z, w.z0, w.z1);
-  const dx = r.x - cx, dz = r.z - cz, d = Math.hypot(dx, dz);
-  if (d >= ROBOT_RADIUS) return;
-  r.wallHit = true;
-  if (!r.robotHit) r.hitAngle = d > 1e-6 ? Math.atan2(cx - r.x, cz - r.z) : r.heading;
-  if (d > 1e-6) {
-    r.x = cx + (dx / d) * ROBOT_RADIUS;
-    r.z = cz + (dz / d) * ROBOT_RADIUS;
-  } else {
-    const exits = [[w.x0 - ROBOT_RADIUS - r.x, 0], [w.x1 + ROBOT_RADIUS - r.x, 0], [0, w.z0 - ROBOT_RADIUS - r.z], [0, w.z1 + ROBOT_RADIUS - r.z]];
-    const [ex, ez] = exits.reduce((a, b) => (Math.hypot(...b) < Math.hypot(...a) ? b : a));
-    r.x += ex; r.z += ez;
-  }
-}
-
-// ---------- radar ----------
-function rayBox(ox, oz, dx, dz, w) {
-  let t0 = 0, t1 = Infinity;
-  for (const [o, d, lo, hi] of [[ox, dx, w.x0, w.x1], [oz, dz, w.z0, w.z1]]) {
-    if (Math.abs(d) < 1e-9) {
-      if (o < lo || o > hi) return Infinity;
-    } else {
-      let a = (lo - o) / d, b = (hi - o) / d;
-      if (a > b) [a, b] = [b, a];
-      t0 = Math.max(t0, a);
-      t1 = Math.min(t1, b);
-      if (t0 > t1) return Infinity;
-    }
-  }
-  return t0;
-}
-
-function rayLength(x, z, angle, max) {
-  const dx = Math.sin(angle), dz = Math.cos(angle);
-  let t = max;
-  if (dx > 1e-9) t = Math.min(t, (ARENA - x) / dx);
-  if (dx < -1e-9) t = Math.min(t, (-ARENA - x) / dx);
-  if (dz > 1e-9) t = Math.min(t, (ARENA - z) / dz);
-  if (dz < -1e-9) t = Math.min(t, (-ARENA - z) / dz);
-  for (const w of WALLS) t = Math.min(t, rayBox(x, z, dx, dz, w));
-  return t;
-}
-
-// Returns { dist, friendly } for the nearest robot in the beam, or null if nothing detected.
-function scan(r, angle, width) {
-  width = clamp(typeof width === 'number' ? width : 0.17, 0.03, 0.35);
-  let found = null;
-  for (const o of robots) {
-    if (o === r || o.dying !== null) continue;
-    const d = Math.hypot(o.x - r.x, o.z - r.z), dir = Math.atan2(o.x - r.x, o.z - r.z);
-    if (d > RADAR_RANGE) continue;
-    if (Math.abs(angDiff(angle, dir)) > width / 2 + Math.asin(Math.min(1, ROBOT_RADIUS / d))) continue;
-    if (rayLength(r.x, r.z, dir, d) < d) continue;
-    if (!found || d < found.dist) found = { dist: d, friendly: o.teamId === r.teamId };
-  }
-  r.scan = { angle, width, found: !!found, range: found ? found.dist : rayLength(r.x, r.z, angle, RADAR_RANGE), age: 0 };
-  return found;
-}
-
-function deliverRadio() {
-  for (const r of robots) {
-    const msgs = teamRadio.get(r.teamId) ?? [];
-    r.radioInbox = msgs.filter((m) => m._from !== r.robotIndex);
-  }
-  teamRadio.clear();
-}
-
-function sendDeathNotice(r) {
-  // Record elimination time if this was the team's last living robot.
-  const teamStillAlive = robots.some((x) => x !== r && x.teamId === r.teamId && x.dying === null);
-  if (!teamStillAlive) teamEliminatedAt[r.teamId] = battleTime;
-
-  if (!config.radioEnabled) return;
-  const allTeamIds = new Set(robots.map((x) => x.teamId));
-  for (const teamId of allTeamIds) {
-    if (!teamRadio.has(teamId)) teamRadio.set(teamId, []);
-    // _from: -1 is a sentinel that no living robot's robotIndex can match, so nobody filters it out.
-    teamRadio.get(teamId).push({ type: 'death', teamId: r.teamId, x: r.x, z: r.z, _from: -1 });
-  }
-}
-
-function think(r) {
-  let scanned = false;
-  const radio = config.radioEnabled ? {
-    inbox: r.radioInbox ?? [],
-    send(msg) {
-      if (!teamRadio.has(r.teamId)) teamRadio.set(r.teamId, []);
-      teamRadio.get(r.teamId).push({ ...msg, _from: r.robotIndex });
-      if (battleTime - (r._lastPulse ?? -1) > 0.4) {
-        radioPulses.push({ x: r.x, z: r.z, color: r.color, age: 0 });
-        r._lastPulse = battleTime;
-      }
-    },
-  } : null;
-  const world = {
-    arena: ARENA, walls: WALLS, bulletSpeed: BULLET_SPEED, radarRange: RADAR_RANGE, time: battleTime,
-    scan: (angle, width) => (scanned ? null : ((scanned = true), scan(r, angle, width))),
-    wallDist: (angle) => rayLength(r.x, r.z, angle, RADAR_RANGE),
-    radio,
-    howitzer: {
-      ready: r.howCooldown <= 0,
-      maxRange: HOWITZER_SPEED ** 2 / HOWITZER_GRAVITY,
-      canReach: (tx, tz) => {
-        const d = Math.hypot(tx - r.x, tz - r.z);
-        return d >= 1 && d * HOWITZER_GRAVITY <= HOWITZER_SPEED ** 2;
-      },
-    },
-  };
-  try {
-    return Strategies[r.strategy].think(r, world) || {};
-  } catch (err) {
-    if (!r.brainError) console.error(`${r.name} (${r.strategy}) crashed:`, (r.brainError = err));
-    return {};
-  }
-}
-
-function livingTeamCount() {
-  return new Set(robots.map((r) => r.teamId)).size;
-}
-
 function update(dt) {
-  if (phase === 'battle') { battleTime += dt; deliverRadio(); }
-  for (const r of robots) {
-    r.recoil = r.recoil.map((v) => Math.max(0, v - dt * 3));
-    r.hit = Math.max(0, r.hit - dt * 4);
-    r.cooldown -= dt;
-    r.howCooldown = Math.max(0, (r.howCooldown ?? 0) - dt);
-    if (r.scan) r.scan.age += dt;
-    r.lastX = r.x; r.lastZ = r.z;
-    if (r.dying !== null) {
-      r.dying += dt / DEATH_TIME;
-      r.speed *= Math.max(0, 1 - dt * 6);
-      r.turnRate = 0;
-      continue;
-    }
-    const cmd = phase === 'battle' ? think(r) : {};
-    drive(r, steer(r, cmd.moveTo), cmd.speed ?? 1, dt);
-    if (typeof cmd.aim === 'number') {
-      r.turret = turnToward(r.turret, cmd.aim, 3 * dt);
-      if (cmd.fire && r.cooldown <= 0 && Math.abs(angDiff(r.turret, cmd.aim)) < 0.08) fire(r);
-    }
-    if (cmd.fireHowitzer && r.howCooldown <= 0)
-      fireHowitzer(r, cmd.fireHowitzer.x, cmd.fireHowitzer.z);
-  }
-
-  for (let i = robots.length - 1; i >= 0; i--) {
-    const r = robots[i];
-    if (r.dying !== null && r.dying >= 1) {
-      explosions.push({ x: r.x, z: r.z, age: 0, color: r.color, seed: r.seed });
-      robots.splice(i, 1);
-    }
+  const events = game.tick(dt);
+  for (const e of events) {
+    if (e.type === 'boom')             { explosions.push({ x: e.x, z: e.z, age: 0, color: e.color, seed: e.seed, scale: e.scale }); playBoom(); }
+    else if (e.type === 'crumble')     { crumbles.push({ x0: e.x0, z0: e.z0, x1: e.x1, z1: e.z1, h: e.h, color: e.color, maxHp: e.maxHp, seed: e.seed, age: 0 }); playCrumble(); }
+    else if (e.type === 'impact')      { impacts.push({ x: e.x, y: e.y, z: e.z, age: 0 }); }
+    else if (e.type === 'radio-pulse') { radioPulses.push({ x: e.x, z: e.z, color: e.color, age: 0 }); }
+    else if (e.type === 'robot-exploded') { explosions.push({ x: e.x, z: e.z, age: 0, color: e.color, seed: e.seed }); }
+    else if (e.type === 'missile-hit') playMissileHit();
+    else if (e.type === 'round-over')  { roundOverPending = true; roundOverWinner = e.winner; roundOverPrefix = e.prefix; }
   }
   for (const e of explosions) e.age += dt;
   explosions = explosions.filter((e) => e.age < RobotGfx.EXPLOSION_TIME);
@@ -918,99 +316,26 @@ function update(dt) {
   crumbles = crumbles.filter((c) => c.age < RobotGfx.CRUMBLE_TIME);
   for (const p of radioPulses) p.age += dt;
   radioPulses = radioPulses.filter((p) => p.age < RobotGfx.RADIO_PULSE_TIME);
-
-  // clear per-frame collision flags before resolving collisions this frame
-  for (const r of robots) { r.wallHit = false; r.robotHit = false; }
-
-  for (let i = 0; i < robots.length; i++)
-    for (let j = i + 1; j < robots.length; j++) {
-      const a = robots[i], b = robots[j];
-      const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
-      if (d < 1.4 && d > 0) {
-        const ang = Math.atan2(dx, dz);
-        a.robotHit = true; a.hitAngle = ang;
-        b.robotHit = true; b.hitAngle = ang + Math.PI;
-        const p = (1.4 - d) / 2 / d;
-        a.x -= dx * p; a.z -= dz * p; b.x += dx * p; b.z += dz * p;
-      }
-    }
-  const lim = ARENA - 0.8;
-  for (const r of robots) {
-    for (const w of WALLS) pushOutOfWall(r, w);
-    r.x = clamp(r.x, -lim, lim);
-    r.z = clamp(r.z, -lim, lim);
-    const moved = Math.hypot(r.x - r.lastX, r.z - r.lastZ), wanted = Math.abs(r.speed) * dt;
-    r.stuckTime = wanted > 0.005 && moved < wanted * 0.3 ? r.stuckTime + dt : 0;
-    r.blocked = r.stuckTime > 0.5;
+  if (roundOverPending && explosions.length === 0) {
+    roundOverPending = false;
+    roundOverTimer = 60;
+    showResults(roundOverWinner, roundOverPrefix);
   }
-  if (phase === 'battle')
-    for (const r of robots) {
-      if (r.dying !== null) continue;
-      const mine = mines.find((m) => Math.hypot(m.x - r.x, m.z - r.z) < MINE_TRIGGER);
-      if (mine) detonate(mine);
+  if (roundOverTimer > 0) {
+    roundOverTimer -= dt;
+    if (roundOverTimer <= 0) {
+      document.getElementById('results').hidden = true;
+      newRound();
+      showSetup();
+      return;
     }
-
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    b.x += b.vx * dt; b.z += b.vz * dt; b.life -= dt;
-    let dead = b.life <= 0;
-    if (b.howitzer) {
-      b.y += b.vy * dt;
-      b.vy -= HOWITZER_GRAVITY * dt;
-      if (!dead && b.y <= 0 && b.vy < 0) { landHowitzer(b); dead = true; }
-    } else {
-      const block = WALLS.find((w) => b.x > w.x0 && b.x < w.x1 && b.z > w.z0 && b.z < w.z1);
-      if (Math.abs(b.x) > ARENA || Math.abs(b.z) > ARENA || block) {
-        impacts.push({ x: b.x, y: b.y, z: b.z, age: 0 });
-        dead = true;
-      }
-      if (block) damageBlock(block);
-      for (const r of robots) {
-        if (r === b.owner || dead || r.dying !== null) continue;
-        if (r.teamId === b.owner.teamId) continue;
-        if (Math.hypot(r.x - b.x, r.z - b.z) < 0.7) {
-          r.hit = 1;
-          playMissileHit();
-          r.hp -= 1;
-          if (r.hp <= 0) { r.hp = 0; r.dying = 0; sendDeathNotice(r); }
-          r.x += b.vx * 0.02; r.z += b.vz * 0.02;
-          dead = true;
-        }
-      }
-    }
-    if (dead) bullets.splice(i, 1);
-  }
-
-  if (phase === 'battle' && livingTeamCount() <= 1 && explosions.length === 0) {
-    const rep = robots[0];
-    endRound(rep ? rep.teamId : null, '');
-  } else if (phase === 'battle' && battleTime >= config.roundMinutes * 60) {
-    const teamHp = {};
-    for (const r of robots.filter((r) => r.dying === null))
-      teamHp[r.teamId] = (teamHp[r.teamId] ?? 0) + r.hp;
-    const sorted = Object.entries(teamHp).sort((a, b) => b[1] - a[1]);
-    const winner = sorted.length > 0 && (sorted.length === 1 || sorted[0][1] > sorted[1][1])
-      ? Number(sorted[0][0]) : null;
-    endRound(winner, "Time's up! ");
-  }
-  if (phase === 'over' && (roundOverTimer -= dt) <= 0) {
-    document.getElementById('results').hidden = true;
-    newRound();
-    showSetup();
   }
   updateBoard();
 }
 
-function endRound(winnerTeamId, prefix) {
-  phase = 'over';
-  roundOverTimer = 60; // long fallback; "New Battle" button fires immediately
-  showResults(winnerTeamId, prefix);
-}
-
 function showResults(winnerTeamId, prefix) {
-  // Tally living robots and HP per team.
   const live = {};
-  for (const r of robots) {
+  for (const r of game.robots) {
     if (r.dying === null) {
       live[r.teamId] ??= { count: 0, hp: 0 };
       live[r.teamId].count++;
@@ -1018,24 +343,22 @@ function showResults(winnerTeamId, prefix) {
     }
   }
 
-  // Build sorted result rows: surviving teams by HP desc, then eliminated.
-  const rows = battleEntrants.map((e) => ({
+  const rows = game.battleEntrants.map((e) => ({
     ...e,
     alive: live[e.teamId]?.count ?? 0,
     hp:    live[e.teamId]?.hp    ?? 0,
   }));
   rows.sort((a, b) => {
-    if (a.alive > 0 !== b.alive > 0) return (b.alive > 0) - (a.alive > 0); // alive before eliminated
-    if (a.alive > 0) return b.hp - a.hp;                                     // alive: more HP = higher place
-    return (teamEliminatedAt[b.teamId] ?? 0) - (teamEliminatedAt[a.teamId] ?? 0); // eliminated: later = higher place
+    if (a.alive > 0 !== b.alive > 0) return (b.alive > 0) - (a.alive > 0);
+    if (a.alive > 0) return b.hp - a.hp;
+    return (game.teamEliminatedAt[b.teamId] ?? 0) - (game.teamEliminatedAt[a.teamId] ?? 0);
   });
 
-  // Title.
   const titleEl = document.getElementById('results-title');
   if (winnerTeamId == null) {
     titleEl.textContent = prefix + 'Draw!';
   } else if (config.teamsMode) {
-    titleEl.textContent = prefix + TEAMS[winnerTeamId % TEAMS.length].name + ' team wins!';
+    titleEl.textContent = prefix + GameEngine.TEAMS[winnerTeamId % GameEngine.TEAMS.length].name + ' team wins!';
   } else {
     const winner = rows.find((e) => e.teamId === winnerTeamId);
     const stratName = winner ? Strategies[winner.strategy]?.name : '';
@@ -1078,7 +401,7 @@ function buildSlots() {
   while (config.strategies.length < count)
     config.strategies.push(STRATEGY_KEYS[config.strategies.length % STRATEGY_KEYS.length]);
   for (let i = 0; i < count; i++) {
-    const team = TEAMS[i % TEAMS.length];
+    const team = GameEngine.TEAMS[i % GameEngine.TEAMS.length];
     const row = document.createElement('div');
     row.className = 'slot';
     row.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b><select></select><small></small>`;
@@ -1089,7 +412,7 @@ function buildSlots() {
     select.addEventListener('change', () => {
       config.strategies[i] = select.value;
       info.textContent = Strategies[select.value].description;
-      if (robots[i]) robots[i].strategy = select.value;
+      if (game?.robots[i]) game.robots[i].strategy = select.value;
       buildBoard();
     });
     slots.append(row);
@@ -1100,7 +423,7 @@ function buildTeamSlots() {
   teamSlots.innerHTML = '';
   while (config.teamStrategies.length < config.teamCount) config.teamStrategies.push([]);
   for (let t = 0; t < config.teamCount; t++) {
-    const team = TEAMS[t % TEAMS.length];
+    const team = GameEngine.TEAMS[t % GameEngine.TEAMS.length];
     while (config.teamStrategies[t].length < config.robotsPerTeam)
       config.teamStrategies[t].push(STRATEGY_KEYS[config.teamStrategies[t].length % STRATEGY_KEYS.length]);
     const teamRow = document.createElement('div');
@@ -1118,7 +441,7 @@ function buildTeamSlots() {
       const captT = t, captRi = ri;
       select.addEventListener('change', () => {
         config.teamStrategies[captT][captRi] = select.value;
-        const r = robots.find((r) => r.teamId === captT && r.robotIndex === captRi);
+        const r = game.robots.find((r) => r.teamId === captT && r.robotIndex === captRi);
         if (r) r.strategy = select.value;
         buildBoard();
       });
@@ -1259,6 +582,7 @@ for (const type of ['input', 'change', 'click']) setup.addEventListener(type, sa
 document.getElementById('results-ok').addEventListener('click', () => {
   document.getElementById('results').hidden = true;
   roundOverTimer = 0;
+  roundOverPending = false;
   newRound();
   showSetup();
 });
@@ -1370,6 +694,7 @@ document.getElementById('rseditor-add').addEventListener('click', () => {
 document.getElementById('fight').addEventListener('click', () => {
   saveConfig();
   newRound();
+  game.startBattle();
   autoCam.target = null;
   autoCam.savedDist = dist;
   for (const c of autoCam.candidates) c.score = 0;
@@ -1424,9 +749,9 @@ function buildBoard() {
   boardRows = [];
   if (config.teamsMode) {
     const groups = {};
-    for (const r of robots) (groups[r.teamId] ??= []).push(r);
+    for (const r of game.robots) (groups[r.teamId] ??= []).push(r);
     for (const [teamId, members] of Object.entries(groups)) {
-      const team = TEAMS[teamId % TEAMS.length];
+      const team = GameEngine.TEAMS[teamId % GameEngine.TEAMS.length];
       const hdr = document.createElement('div');
       hdr.className = 'team-header';
       hdr.innerHTML = `<span class="dot" style="background:${css(team.color)}"></span><b>${team.name}</b>`;
@@ -1441,7 +766,7 @@ function buildBoard() {
       }
     }
   } else {
-    for (const r of robots) {
+    for (const r of game.robots) {
       const row = document.createElement('div');
       row.innerHTML = `<span class="dot" style="background:${css(r.color)}"></span><span><b>${r.name}</b> · ${Strategies[r.strategy].name}</span><span class="hp"></span><button class="eye" title="Watch this robot">👁</button>`;
       board.append(row);
@@ -1453,11 +778,11 @@ function buildBoard() {
 }
 
 function updateBoard() {
-  const left = Math.max(0, Math.ceil(config.roundMinutes * 60 - battleTime));
+  const left = Math.max(0, Math.ceil(config.roundMinutes * 60 - game.battleTime));
   const clockText = `Time left ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
   if (clock.textContent !== clockText) clock.textContent = clockText;
   for (const b of boardRows) {
-    const gone = !robots.includes(b.robot) || b.robot.dying !== null;
+    const gone = !game.robots.includes(b.robot) || b.robot.dying !== null;
     const text = gone ? '♥ 0' : `♥ ${b.robot.hp}`;
     if (text !== b.shown) {
       b.hp.textContent = b.shown = text;
@@ -1465,7 +790,7 @@ function updateBoard() {
     }
   }
   const prevLen = watchedRobots.length;
-  watchedRobots = watchedRobots.filter((r) => robots.includes(r) && r.dying === null);
+  watchedRobots = watchedRobots.filter((r) => game.robots.includes(r) && r.dying === null);
   if (watchedRobots.length !== prevLen) {
     rebuildEyePanel();
     for (const b of boardRows) b.eye?.classList.toggle('watching', watchedRobots.includes(b.robot));
@@ -1555,8 +880,7 @@ let camAspect = 1.6;
 const camEye = (y, p, d = dist) => [camCenter.x + Math.sin(y) * Math.cos(p) * d, Math.sin(p) * d, camCenter.z + Math.cos(y) * Math.cos(p) * d];
 const camTarget = () => [camCenter.x, 0.4, camCenter.z];
 const CAM_FOV = (35 * Math.PI) / 180;
-// Far enough back to see the whole arena, however big it is.
-const maxCamDist = () => Math.max(60, ARENA * 4.2);
+const maxCamDist = () => Math.max(60, game.arena * 4.2);
 
 // The closest camera distance (for this yaw and pitch) at which every point still lands inside
 // the middle of the picture, leaving a margin for the scoreboard and the robots' signs.
@@ -1593,19 +917,19 @@ function segHitsBlock(a, b, w) {
 function scoreView(c) {
   const eye = camEye(c.yaw, c.pitch);
   let seen = 0;
-  for (const r of robots) {
+  for (const r of game.robots) {
     if (r.dying !== null) continue;
     for (const y of [0.7, 1.6]) {
       const p = [r.x, y, r.z];
       const x0 = Math.min(eye[0], p[0]), x1 = Math.max(eye[0], p[0]), z0 = Math.min(eye[2], p[2]), z1 = Math.max(eye[2], p[2]);
-      if (!WALLS.some((w) => w.x1 > x0 && w.x0 < x1 && w.z1 > z0 && w.z0 < z1 && segHitsBlock(eye, p, w))) seen += 0.5;
+      if (!game.walls.some((w) => w.x1 > x0 && w.x0 < x1 && w.z1 > z0 && w.z0 < z1 && segHitsBlock(eye, p, w))) seen += 0.5;
     }
   }
   return seen;
 }
 
 function updateAutoCam(dt) {
-  if (phase !== 'battle' || drag || performance.now() < autoCam.holdUntil) return;
+  if (game.phase !== 'battle' || drag || performance.now() < autoCam.holdUntil) return;
   const cs = autoCam.candidates;
   for (let k = 0; k < 8; k++) { const c = cs[autoCam.next]; c.score = scoreView(c); autoCam.next = (autoCam.next + 1) % cs.length; }
   // Prefer low views and little turning; only switch target for a clearly better view.
@@ -1616,8 +940,7 @@ function updateAutoCam(dt) {
   yaw += clamp(angDiff(yaw, t.yaw) * ease, -0.4 * dt, 0.4 * dt);
   pitch += clamp((t.pitch - pitch) * ease, -0.2 * dt, 0.2 * dt);
 
-  // Pan to the middle of the robots still fighting, then zoom so they all fit.
-  const alive = robots.filter((r) => r.dying === null);
+  const alive = game.robots.filter((r) => r.dying === null);
   if (!alive.length) return;
   const xs = alive.map((r) => r.x), zs = alive.map((r) => r.z);
   const mx = (Math.min(...xs) + Math.max(...xs)) / 2, mz = (Math.min(...zs) + Math.max(...zs)) / 2;
@@ -1635,7 +958,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 addEventListener('keydown', (e) => {
   if (e.target.closest('select, button, input')) return;
-  if (e.code === 'Escape' && phase !== 'setup' && confirm('Stop the current battle?')) { paused = false; document.getElementById('results').hidden = true; showSetup(); }
+  if (e.code === 'Escape' && phase !== 'setup' && confirm('Stop the current battle?')) { paused = false; document.getElementById('results').hidden = true; roundOverPending = false; roundOverTimer = 0; newRound(); showSetup(); }
   if (e.code === 'Space') paused = !paused;
   if (e.code === 'KeyM') muted = !muted;
 });
@@ -1779,18 +1102,18 @@ function frame(now) {
   const view = mat4.lookAt(eye, camTarget(), [0, 1, 0]);
   const proj = mat4.perspective(CAM_FOV, camAspect, 0.5, 500);
   gfx.begin(mat4.mul(proj, view), eye);
-  gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
-  gfx.drawWalls(WALLS);
-  for (const m of mines) gfx.drawMine(m, simTime);
+  gfx.drawArena(game.arena, GROUND_KINDS[config.ground]);
+  gfx.drawWalls(game.walls);
+  for (const m of game.mines) gfx.drawMine(m, simTime);
   for (const p of radioPulses) gfx.drawRadioPulse(p);
-  for (const r of robots) gfx.drawRadar(r);
-  for (const r of robots) gfx.drawRobot(r, simTime);
-  for (const b of bullets) gfx.drawBullet(b);
+  for (const r of game.robots) gfx.drawRadar(r);
+  for (const r of game.robots) gfx.drawRobot(r, simTime);
+  for (const b of game.bullets) gfx.drawBullet(b);
   for (const i of impacts) gfx.drawImpact(i);
   for (const e of explosions) gfx.drawExplosion(e);
   for (const c of crumbles) gfx.drawCrumble(c);
 
-  if (watchedRobots.length > 0 && phase === 'battle') {
+  if (watchedRobots.length > 0 && game.phase === 'battle') {
     const sx = canvas.width / canvas.clientWidth, sy = canvas.height / canvas.clientHeight;
     const ports = document.getElementById('eyepanel').querySelectorAll('.eyeslot-port');
     for (let vi = 0; vi < watchedRobots.length; vi++) {
@@ -1812,12 +1135,12 @@ function frame(now) {
       const eyeView = mat4.lookAt(eyePos, lookPt, [0, 1, 0]);
       const eyeProj = mat4.perspective((65 * Math.PI) / 180, pw / ph, 0.3, 200);
       gfx.begin(mat4.mul(eyeProj, eyeView), eyePos);
-      gfx.drawArena(ARENA, GROUND_KINDS[config.ground]);
-      gfx.drawWalls(WALLS);
-      for (const m of mines) gfx.drawMine(m, simTime);
+      gfx.drawArena(game.arena, GROUND_KINDS[config.ground]);
+      gfx.drawWalls(game.walls);
+      for (const m of game.mines) gfx.drawMine(m, simTime);
       for (const p of radioPulses) gfx.drawRadioPulse(p);
-      for (const rb of robots) if (rb !== r) gfx.drawRobot(rb, simTime);
-      for (const b of bullets) gfx.drawBullet(b);
+      for (const rb of game.robots) if (rb !== r) gfx.drawRobot(rb, simTime);
+      for (const b of game.bullets) gfx.drawBullet(b);
       for (const i of impacts) gfx.drawImpact(i);
       for (const e of explosions) gfx.drawExplosion(e);
       for (const c of crumbles) gfx.drawCrumble(c);
