@@ -115,7 +115,7 @@
   <div class="config-section">
     <div class="config-row">
       <label>Arena: <span id="arenaVal">14</span>
-        <input type="range" id="arenaSize" min="10" max="30" value="14" step="1">
+        <input type="range" id="arenaSize" min="10" max="150" value="14" step="1">
       </label>
       <label>Shots to kill: <input type="number" id="shotsToKill" min="1" max="10" value="6"></label>
       <label>Time limit: <input type="number" id="roundMinutes" min="1" max="30" value="3"> min</label>
@@ -160,6 +160,7 @@
   <div class="mode-row">
     <label><input type="checkbox" id="teamsMode"> Teams mode</label>
     <label><input type="checkbox" id="radioEnabled" checked> Radio</label>
+    <label><input type="checkbox" id="soundEnabled" checked> Sound</label>
   </div>
   <div id="noTeamsSection">
     <div class="count-row">
@@ -209,13 +210,10 @@ gfx.loadTextures(TEXTURE_FILES.map((f) => 'textures/' + f));
 
 const STRATEGY_KEYS = Object.keys(Strategies);
 
-const LARGE_ARENA = new URLSearchParams(location.search).get('size') === 'large';
-if (LARGE_ARENA) document.getElementById('arenaSize').max = GameEngine.MAX_ARENA;
-
 let config = {
   arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2, ground: 'checker',
   roundMinutes: 3,
-  teamsMode: false, radioEnabled: true,
+  teamsMode: false, radioEnabled: true, soundEnabled: true,
   robotCount: 4,
   strategies: ['rambo', 'pacer', 'sniper', 'hunter'],
   teamCount: 2, robotsPerTeam: 2,
@@ -226,7 +224,7 @@ let config = {
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
   const isStrategy = (k) => typeof k === 'string' && Object.hasOwn(Strategies, k);
-  if (saved.arenaSize >= 10 && saved.arenaSize <= (LARGE_ARENA ? GameEngine.MAX_ARENA : 30)) config.arenaSize = saved.arenaSize | 0;
+  if (saved.arenaSize >= 10 && saved.arenaSize <= GameEngine.MAX_ARENA) config.arenaSize = saved.arenaSize | 0;
   if (Object.hasOwn(GameEngine.WALL_LAYOUTS, saved.layout) || saved.layout === 'downtown') config.layout = saved.layout;
   if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
   if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
@@ -236,6 +234,7 @@ function applySaved(saved) {
   if (Object.hasOwn(GROUND_KINDS, saved.ground)) config.ground = saved.ground;
   if (typeof saved.teamsMode === 'boolean') config.teamsMode = saved.teamsMode;
   if (typeof saved.radioEnabled === 'boolean') config.radioEnabled = saved.radioEnabled;
+  if (typeof saved.soundEnabled === 'boolean') config.soundEnabled = saved.soundEnabled;
   if (saved.robotCount >= 1 && saved.robotCount <= 8) config.robotCount = saved.robotCount | 0;
   if (Array.isArray(saved.strategies))
     config.strategies = saved.strategies.slice(0, 8).map((k) => (isStrategy(k) ? k : STRATEGY_KEYS[0]));
@@ -296,6 +295,7 @@ const angDiff = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from
 function newRound(cfg) {
   clearWatched();
   game = GameEngine.create(cfg ?? config, Strategies);
+  muted = !(cfg ?? config).soundEnabled;
   msg.textContent = '';
   buildBoard();
 }
@@ -468,6 +468,7 @@ function showSetup() {
   document.getElementById('groundPick').value = config.ground;
   document.getElementById('teamsMode').checked = config.teamsMode;
   document.getElementById('radioEnabled').checked = config.radioEnabled;
+  document.getElementById('soundEnabled').checked = config.soundEnabled;
   document.getElementById('robotCount').value = config.robotCount;
   document.getElementById('teamCount').value = config.teamCount;
   document.getElementById('robotsPerTeam').value = config.robotsPerTeam;
@@ -522,6 +523,11 @@ document.getElementById('layoutPick').addEventListener('change', (e) => {
 
 document.getElementById('radioEnabled').addEventListener('change', (e) => {
   config.radioEnabled = e.target.checked;
+});
+
+document.getElementById('soundEnabled').addEventListener('change', (e) => {
+  config.soundEnabled = e.target.checked;
+  muted = !config.soundEnabled;
 });
 
 document.getElementById('roundMinutes').addEventListener('input', (e) => {
