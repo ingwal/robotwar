@@ -177,7 +177,7 @@
     let ARENA        = cfg.arenaSize ?? 14;
     let RADAR_RANGE  = ARENA * 2 * Math.SQRT2;
     let WALLS        = buildWalls(cfg.layout ?? 'cross', ARENA, cfg.wallHp ?? 2);
-    let wallsVersion = 0, nav = null;
+    let wallsVersion = 0, nav = null, wpGraph = null;
 
     let robots   = [];
     let bullets  = [];
@@ -242,35 +242,58 @@
       return true;
     }
 
+    function buildWaypointGraph() {
+      const g = navGrid();
+      const spacing = Math.max(3, ARENA / 5);
+      const pts = [];
+      for (let z = -ARENA + spacing * 0.5; z < ARENA; z += spacing)
+        for (let x = -ARENA + spacing * 0.5; x < ARENA; x += spacing)
+          if (navFree(g, { x, z })) pts.push({ x, z });
+
+      const edges = pts.map(() => []);
+      for (let i = 0; i < pts.length; i++)
+        for (let j = i + 1; j < pts.length; j++)
+          if (lineClear(pts[i], pts[j])) {
+            const d = Math.hypot(pts[j].x - pts[i].x, pts[j].z - pts[i].z);
+            edges[i].push([j, d]);
+            edges[j].push([i, d]);
+          }
+
+      wpGraph = { pts, edges, version: wallsVersion };
+    }
+
     function findPath(from, to) {
-      const g = navGrid(), n = g.n;
-      const s = nearestFreePoint(from), t = nearestFreePoint(to);
-      const [si, sj] = navCell(g, s), [ti, tj] = navCell(g, t);
-      const start = sj * n + si, goal = tj * n + ti;
-      const h = (k) => { const dx = Math.abs((k % n) - ti), dz = Math.abs(((k / n) | 0) - tj); return Math.max(dx, dz) + 0.414 * Math.min(dx, dz); };
-      const cost = new Float32Array(n * n).fill(Infinity), came = new Int32Array(n * n).fill(-1);
-      const heap = [[h(start), start]];
+      if (!wpGraph || wpGraph.version !== wallsVersion) buildWaypointGraph();
+      const { pts, edges } = wpGraph;
+      if (!pts.length) return [];
+
+      let si = 0, ti = 0, sd = Infinity, td = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const df = (pts[i].x - from.x) ** 2 + (pts[i].z - from.z) ** 2;
+        const dt2 = (pts[i].x - to.x) ** 2 + (pts[i].z - to.z) ** 2;
+        if (df < sd) { sd = df; si = i; }
+        if (dt2 < td) { td = dt2; ti = i; }
+      }
+      if (si === ti) return [];
+
+      const n = pts.length, tx = pts[ti].x, tz = pts[ti].z;
+      const h = (i) => Math.hypot(pts[i].x - tx, pts[i].z - tz);
+      const cost = new Float32Array(n).fill(Infinity), came = new Int32Array(n).fill(-1);
+      const heap = [[h(si), si]];
       const push = (e) => { heap.push(e); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
       const pop  = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-      cost[start] = 0;
-      let best = start;
+      cost[si] = 0;
       while (heap.length) {
         const [, k] = pop();
-        if (k === goal) { best = k; break; }
-        if (h(k) < h(best)) best = k;
-        const i = k % n, j = (k / n) | 0;
-        for (let dj = -1; dj <= 1; dj++)
-          for (let di = -1; di <= 1; di++) {
-            if (!di && !dj) continue;
-            const ni = i + di, nj = j + dj;
-            if (ni < 0 || nj < 0 || ni >= n || nj >= n || !g.free[nj * n + ni]) continue;
-            if (di && dj && (!g.free[j * n + ni] || !g.free[nj * n + i])) continue;
-            const nk = nj * n + ni, c = cost[k] + (di && dj ? 1.414 : 1);
-            if (c < cost[nk]) { cost[nk] = c; came[nk] = k; push([c + h(nk), nk]); }
-          }
+        if (k === ti) break;
+        for (const [j, d] of edges[k]) {
+          const nc = cost[k] + d;
+          if (nc < cost[j]) { cost[j] = nc; came[j] = k; push([nc + h(j), j]); }
+        }
       }
+
       const path = [];
-      for (let k = best; k !== start && k !== -1; k = came[k]) path.push(navPoint(k % n, (k / n) | 0));
+      for (let k = ti; k !== si && k !== -1; k = came[k]) path.push(pts[k]);
       return path.reverse();
     }
 
@@ -572,6 +595,7 @@
             strategy: r.strategy, startCount: robots.filter((x) => x.teamId === r.teamId).length });
         }
       }
+      buildWaypointGraph();
     })();
 
     // ---- Main simulation tick ----
