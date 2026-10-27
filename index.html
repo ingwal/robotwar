@@ -284,6 +284,7 @@ applySaved(configFromQuery(location.search));
 
 let phase = 'setup';
 let game;
+let muted = !config.soundEnabled;
 let explosions = [], impacts = [], crumbles = [], radioPulses = [];
 let roundOverPending = false, roundOverWinner = null, roundOverPrefix = '';
 let roundOverTimer = 0;
@@ -973,7 +974,7 @@ addEventListener('keydown', (e) => {
 });
 
 // ---------- sound ----------
-let audio = null, noise = null, muted = false;
+let audio = null, noise = null;
 function unlockAudio() {
   if (!audio) {
     audio = new AudioContext();
