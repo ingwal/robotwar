@@ -209,6 +209,9 @@ gfx.loadTextures(TEXTURE_FILES.map((f) => 'textures/' + f));
 
 const STRATEGY_KEYS = Object.keys(Strategies);
 
+const LARGE_ARENA = new URLSearchParams(location.search).get('size') === 'large';
+if (LARGE_ARENA) document.getElementById('arenaSize').max = 50;
+
 let config = {
   arenaSize: 14, layout: 'cross', shotsToKill: 6, wallHp: 2, mineCount: 0, mineDamage: 2, ground: 'checker',
   roundMinutes: 3,
@@ -223,7 +226,7 @@ let config = {
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
   const isStrategy = (k) => typeof k === 'string' && Object.hasOwn(Strategies, k);
-  if (saved.arenaSize >= 10 && saved.arenaSize <= 30) config.arenaSize = saved.arenaSize | 0;
+  if (saved.arenaSize >= 10 && saved.arenaSize <= (LARGE_ARENA ? 50 : 30)) config.arenaSize = saved.arenaSize | 0;
   if (Object.hasOwn(GameEngine.WALL_LAYOUTS, saved.layout) || saved.layout === 'downtown') config.layout = saved.layout;
   if (saved.shotsToKill >= 1 && saved.shotsToKill <= 10) config.shotsToKill = saved.shotsToKill | 0;
   if (WALL_HP_CHOICES.includes(saved.wallHp)) config.wallHp = saved.wallHp;
