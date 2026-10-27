@@ -44,6 +44,94 @@ radar queries, and camera controls that work at scale. This is largely
 an engine/performance refactor, but it unlocks everything
 terrain-related.
 
+*Pathfinding notes:* The navigation system has three layers: (1) `navGrid()` builds
+an `n × n` boolean grid with 0.5-unit cells, cached per wall layout — at arena=14
+`n=56` (3,136 cells); at arena=200 `n=800` (640,000 cells); at arena=500 `n=2000`
+(4M cells). (2) `lineClear(a, b)` walks the straight line in 0.25-unit steps and
+is called 1–8 times per robot per tick — this is the dominant per-tick cost and
+grows with travel distance. (3) `findPath()` runs A\* on the full grid but its
+result is cached per robot for 2 seconds, so it rarely fires during open travel.
+
+The scaling problem is A\*: a single cross-map query at arena=200 searches 640,000
+nodes, which is orders of magnitude slower than today. `lineClear` is the real
+per-tick concern — solvable by checking against a spatial hash of wall segments
+rather than the full grid. For large open arenas A\* is rarely needed anyway
+(robots can usually see their goal directly), so the practical fix is: spatial
+hash for `lineClear` + a fallback hierarchical or waypoint-graph path planner for
+the cases where walls genuinely block the direct route.
+
+*How far the current representation stretches:* The binding constraint is that
+`findPath()` freshly allocates `Float32Array(n²)` + `Int32Array(n²)` on every
+call (never reused). The navGrid `Uint8Array` is cached, but the A\* work arrays
+are not.
+
+| Arena | Grid cells | Per A\* call | 8 robots replanning at once |
+|-------|------------|--------------|------------------------------|
+| 14 (current default) | 3,136 | 25 KB | 200 KB |
+| 30 (current max) | 14,400 | 115 KB | 920 KB |
+| 50 | 40,000 | 320 KB | 2.5 MB |
+| 80 | 102,400 | 820 KB | 6.5 MB |
+| 100 | 160,000 | 1.3 MB | 10 MB |
+
+**Practical ceiling without any code changes: arena ≈ 50–60** (3–4× the current
+default). Arena 80 works but causes visible GC stutters on the opening tick and
+whenever multiple walls fall at once.
+
+**One change that buys ~3× more headroom:** pre-allocate the two A\* work arrays
+once at `startBattle()` and reuse them with a generation counter (no `fill()` on
+every call). This eliminates all A\* allocation cost and pushes the ceiling to
+around arena ≈ 150, where A\* *exploration time* — not memory — becomes the
+bottleneck. That is a genuinely different problem requiring a different algorithm.
+
+*Waypoint graph approach for large arenas:* Replace the full-grid A\* with a small
+pre-computed waypoint graph. At `startBattle()`, place 30–80 waypoints at corridor
+junctions, wall gaps, and open areas. Connect each waypoint to its visible
+neighbours (those that pass `lineClear`) and store the edge weights. Both the graph
+and the edge weights are built once per round from the known wall layout.
+
+Runtime navigation then has two levels:
+
+1. *Long-range plan:* find the nearest waypoint to the robot and to the goal, then
+   run A\* over the waypoint graph — ~50 nodes rather than hundreds of thousands of
+   grid cells. This yields a short sequence of waypoints to pass through.
+2. *Local steering:* head toward the next waypoint using the existing
+   `lineClear`-first approach. On the final leg from the last waypoint to the
+   actual goal, `lineClear` almost always succeeds because waypoints were placed in
+   open positions.
+
+Per-tick cost becomes: `lineClear` for local steering (same as today) + occasional
+A\* over ~50 nodes (microseconds). The large `Float32Array`/`Int32Array`
+allocations disappear entirely. This scales to arena=500 without any per-tick cost
+increase.
+
+*Finding the nearest waypoint:* no lookup table is needed. For ~50 waypoints, a
+linear scan using squared distances (no square root) takes under a microsecond in
+V8 and uses no memory. A quadtree would only pay off with hundreds of waypoints,
+which only arise in very large arenas packed with obstacles.
+
+*Terrain costs in the waypoint graph:* when terrain types exist, edge weights
+become traversal cost rather than Euclidean distance — the integral of the terrain
+cost multiplier along the edge. A swamp-crossing of length 10 at half speed costs
+20, the same as a clear-ground edge of length 20. A\* then finds the least-cost
+route rather than the shortest one. The "nearest waypoint" search changes
+accordingly: weight by estimated traversal cost rather than straight-line distance,
+since a close waypoint behind a bog may be slower to reach than a farther one on
+clear ground.
+
+Robot type speed modifiers plug into the same layer: a Scout and a Tank consulting
+the same graph get different effective edge costs and may therefore choose different
+routes — emergent strategic behaviour from a single data structure.
+
+Paths are not globally optimal for very long trips, but "reach the right part of
+the map efficiently" is all robot navigation needs — the local `lineClear` steering
+handles the final fine-grained approach exactly as today.
+
+The one non-trivial step is placing waypoints automatically from the wall layout. A
+simple approach: seed candidates on a coarse grid, discard those inside or too
+close to a wall, then thin them by removing any whose nearest neighbour is within a
+minimum spacing. Straightforward to implement from the existing `navGrid` and
+`lineClear` primitives.
+
 **3D terrain with elevation**
 *Effort: Hard — 3–5 weeks*
 A height map (grayscale texture → vertex displacement). The terrain
