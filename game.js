@@ -15,6 +15,7 @@
 
   // ---- Module-level constants ----
   const MAX_HP            = 6;
+  const MAX_ARENA         = 150;
   const MAX_SPEED         = 1.8;
   const BULLET_SPEED      = 16;
   const DEATH_TIME        = 0.7;
@@ -731,7 +732,7 @@
     };
   }
 
-  const GameEngine = { create, TEAMS, BUILDING_KINDS, WALL_LAYOUTS };
+  const GameEngine = { create, TEAMS, BUILDING_KINDS, WALL_LAYOUTS, MAX_ARENA };
   global.GameEngine = GameEngine;
 
 }(typeof globalThis !== 'undefined' ? globalThis : window));
